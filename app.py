@@ -10,6 +10,9 @@ import ta # Import the 'ta' library for technical analysis indicators
 app = Flask(__name__)
 
 # --- Twelve Data API Configuration ---
+# Retrieve the Twelve Data API key from environment variables for security.
+# It's crucial NOT to hardcode your API key directly in the code.
+# You MUST set this environment variable on your Render dashboard.
 TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY')
 
 # Define the webhook endpoint
@@ -68,6 +71,7 @@ def get_price_data():
             if current_price is not None:
                 try:
                     formatted_price = f"${float(current_price):,.2f}"
+                    # Replace '/' with ' to ' for better speech (e.g., BTC to USD)
                     readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() 
                     return jsonify({"text": f"The current price of {readable_symbol} is {formatted_price}."})
                 except ValueError:
@@ -167,34 +171,41 @@ def get_price_data():
                     df['SMA'] = ta.trend.sma_indicator(df['close'], window=indicator_period)
                     indicator_value = df['SMA'].iloc[-1] # Get the latest SMA value
                     indicator_description = f"{indicator_period}-period Simple Moving Average"
-                # --- Add more indicators here ---
-                # elif indicator_name == 'EMA':
-                #     if len(df) < indicator_period:
-                #         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period EMA for {readable_symbol}."}), 400
-                #     df['EMA'] = ta.trend.ema_indicator(df['close'], window=indicator_period)
-                #     indicator_value = df['EMA'].iloc[-1]
-                #     indicator_description = f"{indicator_period}-period Exponential Moving Average"
-                # elif indicator_name == 'RSI':
-                #     if len(df) < indicator_period: # RSI typically needs more data than just the period
-                #         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period RSI for {readable_symbol}."}), 400
-                #     df['RSI'] = ta.momentum.rsi(df['close'], window=indicator_period)
-                #     indicator_value = df['RSI'].iloc[-1]
-                #     indicator_description = f"{indicator_period}-period Relative Strength Index"
-                # elif indicator_name == 'MACD':
-                #     # MACD requires default fast=12, slow=26, signal=9. Period here might refer to fast/slow/signal.
-                #     # For simplicity, if indicator_period is provided, we can use it for the fast EMA.
-                #     # More robust implementation would need separate fast/slow/signal periods.
-                #     if len(df) < 34: # Typical MACD needs at least 26 (slow EMA) + some buffer
-                #         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}."}), 400
-                #     macd = ta.trend.macd(df['close'], window_fast=12, window_slow=26, window_sign=9)
-                #     macd_signal = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9)
-                #     macd_diff = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9)
-                #     indicator_value = {'MACD_Line': macd.iloc[-1], 'Signal_Line': macd_signal.iloc[-1], 'Histogram': macd_diff.iloc[-1]}
-                #     indicator_description = "Moving Average Convergence Divergence"
-                #     # Returning MACD is more complex as it has 3 values. You'd need to decide how to verbalize this.
-                #     # For now, let's stick to single-value indicators like SMA/EMA/RSI.
+                elif indicator_name == 'EMA':
+                    if len(df) < indicator_period:
+                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period EMA for {readable_symbol}. Need at least {indicator_period} data points."}), 400
+                    df['EMA'] = ta.trend.ema_indicator(df['close'], window=indicator_period)
+                    indicator_value = df['EMA'].iloc[-1]
+                    indicator_description = f"{indicator_period}-period Exponential Moving Average"
+                elif indicator_name == 'RSI':
+                    # RSI typically needs more data than just the period for accurate calculation from scratch
+                    # A common practice is to ensure at least 2*period data points.
+                    if len(df) < indicator_period * 2: 
+                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period RSI for {readable_symbol}. Need at least {indicator_period * 2} data points."}), 400
+                    df['RSI'] = ta.momentum.rsi(df['close'], window=indicator_period)
+                    indicator_value = df['RSI'].iloc[-1]
+                    indicator_description = f"{indicator_period}-period Relative Strength Index"
+                elif indicator_name == 'MACD':
+                    # MACD requires default fast=12, slow=26, signal=9.
+                    # For simplicity, if indicator_period is provided, we can use it for the fast EMA.
+                    # More robust implementation would need separate fast/slow/signal periods.
+                    # MACD calculation requires a longer history than the periods themselves.
+                    if len(df) < 34: # Typical MACD needs at least 26 (slow EMA) + some buffer
+                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
+                    
+                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26, window_sign=9)
+                    macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9)
+                    macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9)
+                    
+                    # Return all three MACD components
+                    indicator_value = {
+                        'MACD_Line': macd_line.iloc[-1],
+                        'Signal_Line': macd_signal_line.iloc[-1],
+                        'Histogram': macd_histogram.iloc[-1]
+                    }
+                    indicator_description = "Moving Average Convergence Divergence"
                 else:
-                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported. Supported indicators: SMA."}), 400
+                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported. Supported indicators: SMA, EMA, RSI, MACD."}), 400
 
                 if indicator_value is not None:
                     if isinstance(indicator_value, dict): # For indicators like MACD with multiple values
@@ -218,5 +229,6 @@ def get_price_data():
 
 # This block ensures the Flask app runs when the script is executed directly.
 if __name__ == '__main__':
+    # Get the port from environment variables (common for deployment platforms)
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
