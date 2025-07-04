@@ -73,9 +73,14 @@ def get_price_data():
                 return jsonify({"text": f"Could not retrieve live price for {symbol}. The symbol might be invalid or not found."}), 500
 
         elif data_type == 'historical':
-            # Validate parameters for historical data
-            if not interval or not outputsize:
-                return jsonify({"text": "Error: For historical data, 'interval' (e.g., 1min, 1day) and 'outputsize' (number of data points) parameters are required."}), 400
+            # --- FIX: Provide default values if interval or outputsize are not provided ---
+            if not interval:
+                interval = '1day' # Default interval if not specified
+                print(f"Defaulting 'interval' to '{interval}' for historical data.")
+            if not outputsize:
+                outputsize = '1' # Default outputsize if not specified (latest data point)
+                print(f"Defaulting 'outputsize' to '{outputsize}' for historical data.")
+            # --- END FIX ---
 
             # Twelve Data's API endpoint for time series (historical data)
             api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
