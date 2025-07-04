@@ -80,7 +80,13 @@ def get_price_data():
             if not outputsize:
                 outputsize = '1' # Default outputsize if not specified (latest data point)
                 print(f"Defaulting 'outputsize' to '{outputsize}' for historical data.")
-            # --- END FIX ---
+            
+            # --- NEW FIX: Convert outputsize to integer ---
+            try:
+                outputsize = int(float(outputsize)) # Convert to float first to handle "7.0", then to int
+            except (ValueError, TypeError):
+                return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
+            # --- END NEW FIX ---
 
             # Twelve Data's API endpoint for time series (historical data)
             api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
