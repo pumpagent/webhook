@@ -2,9 +2,16 @@
 from flask import Flask, jsonify, request
 import requests
 import os
+import time # Import the time module for caching
 
 # Initialize the Flask application
 app = Flask(__name__)
+
+# --- Caching Mechanism ---
+# A dictionary to store cached prices: {symbol: {'price': value, 'timestamp': time_of_fetch}}
+price_cache = {}
+# Cache duration in seconds (e.g., 60 seconds = 1 minute)
+CACHE_DURATION = 60 
 
 # Define the webhook endpoint
 # This endpoint now accepts a 'symbol' parameter to fetch different cryptocurrencies.
@@ -12,6 +19,7 @@ app = Flask(__name__)
 def get_crypto_price():
     """
     This endpoint fetches the current cryptocurrency price in USD from the CoinGecko API.
+    It incorporates a basic caching mechanism to reduce API calls and avoid rate limits.
     It requires a 'symbol' query parameter (e.g., 'bitcoin', 'ethereum').
     It returns the price as a formatted string within a JSON object,
     suitable for Eleven Labs AI agents.
@@ -23,11 +31,25 @@ def get_crypto_price():
     if not symbol:
         return jsonify({"text": "Error: Missing 'symbol' parameter. Please specify a cryptocurrency symbol (e.g., bitcoin, ethereum)."}), 400
 
+    # Convert symbol to lowercase for consistent caching and CoinGecko IDs
+    symbol = symbol.lower()
+
+    # --- Check Cache First ---
+    current_time = time.time()
+    if symbol in price_cache:
+        cached_data = price_cache[symbol]
+        # If the cached data is still fresh (within CACHE_DURATION)
+        if (current_time - cached_data['timestamp']) < CACHE_DURATION:
+            formatted_price = f"${cached_data['price']:,.2f}"
+            print(f"Serving cached price for {symbol}: {formatted_price}")
+            return jsonify({"text": f"The current price of {symbol.replace('-', ' ')} is {formatted_price} US dollars (cached)."})
+
     try:
         # Make a request to the CoinGecko API to get the specified crypto's price in USD
         # CoinGecko uses the cryptocurrency's ID (e.g., 'bitcoin', 'ethereum')
         api_url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies=usd"
         
+        print(f"Fetching fresh price for {symbol} from CoinGecko API...")
         response = requests.get(api_url)
 
         # Raise an HTTPError for bad responses (4xx or 5xx)
@@ -43,6 +65,9 @@ def get_crypto_price():
 
         # Check if the price was successfully retrieved
         if crypto_price is not None:
+            # Update the cache with the new price and timestamp
+            price_cache[symbol] = {'price': crypto_price, 'timestamp': current_time}
+            
             # Format the price for better readability (e.g., $65,432.10)
             formatted_price = f"${crypto_price:,.2f}"
             
