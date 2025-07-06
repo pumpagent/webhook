@@ -1,5 +1,3 @@
 Flask
 requests
 gunicorn
-pandas
-ta
