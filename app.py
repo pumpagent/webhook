@@ -112,18 +112,11 @@ def get_market_data():
                 if not indicator_period:
                     return jsonify({"text": "Error: 'indicator_period' is required for technical indicators."}), 400
                 
-                # --- START: Enhanced indicator_period parsing ---
                 try:
-                    # Attempt to convert directly to int first (for clean integers)
+                    # Convert indicator_period to integer
                     indicator_period = int(indicator_period)
-                except ValueError:
-                    # If direct int conversion fails, try float then int (for "14.0")
-                    try:
-                        indicator_period = int(float(indicator_period))
-                    except (ValueError, TypeError):
-                        # If both fail, return a specific error
-                        return jsonify({"text": f"Error: The indicator period '{indicator_period}' must be a whole number (e.g., 14, 20, 50). Please avoid decimals or text."}), 400
-                # --- END: Enhanced indicator_period parsing ---
+                except (ValueError, TypeError):
+                    return jsonify({"text": "Error: 'indicator_period' parameter must be a whole number (e.g., 14, not 14.0)."}), 400
 
                 # Ensure outputsize is sufficient for the indicator period
                 # Fetch at least 2x the period for safety, or a minimum of 50 if period is small
@@ -209,10 +202,9 @@ def get_market_data():
                     indicator_value = df['RSI'].iloc[-1]
                     indicator_description = f"{indicator_period}-period Relative Strength Index"
                 elif indicator_name == 'MACD':
-                    if len(df) < 34: # MACD typically needs at least 26 (slow EMA) + some buffer
+                    if len(df) < 34:
                         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
                     
-                    # This version has the 'window_sign' error
                     macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26, window_sign=9)
                     macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9)
                     macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9)
