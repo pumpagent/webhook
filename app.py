@@ -112,11 +112,18 @@ def get_market_data():
                 if not indicator_period:
                     return jsonify({"text": "Error: 'indicator_period' is required for technical indicators."}), 400
                 
+                # --- START: Enhanced indicator_period parsing ---
                 try:
-                    # Convert indicator_period to integer
+                    # Attempt to convert directly to int first (for clean integers)
                     indicator_period = int(indicator_period)
-                except (ValueError, TypeError):
-                    return jsonify({"text": "Error: 'indicator_period' parameter must be a whole number (e.g., 14, not 14.0)."}), 400
+                except ValueError:
+                    # If direct int conversion fails, try float then int (for "14.0")
+                    try:
+                        indicator_period = int(float(indicator_period))
+                    except (ValueError, TypeError):
+                        # If both fail, return a specific error
+                        return jsonify({"text": f"Error: The indicator period '{indicator_period}' must be a whole number (e.g., 14, 20, 50). Please avoid decimals or text."}), 400
+                # --- END: Enhanced indicator_period parsing ---
 
                 # Ensure outputsize is sufficient for the indicator period
                 # Fetch at least 2x the period for safety, or a minimum of 50 if period is small
