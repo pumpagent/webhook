@@ -151,6 +151,14 @@ def get_market_data():
             if not indicator_period:
                 return jsonify({"text": "Error: 'indicator_period' is required for technical indicators."}), 400
             
+            # --- FIX: Convert indicator_period to integer ---
+            try:
+                # Convert to float first to handle "14.0", then to int
+                indicator_period = int(float(indicator_period)) 
+            except (ValueError, TypeError):
+                return jsonify({"text": "Error: 'indicator_period' parameter must be a whole number (e.g., 14, not 14.0)."}), 400
+            # --- END FIX ---
+
             # Set default interval if not provided for indicator
             if not interval:
                 interval = '1day'
