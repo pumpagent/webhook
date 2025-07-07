@@ -100,7 +100,7 @@ def get_market_data():
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for historical data. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
             
-            # Set default interval and outputsize if not provided
+            # Set default interval if not provided
             if not interval:
                 interval = '1day'
                 print(f"Defaulting 'interval' to '{interval}' for historical/indicator data.")
@@ -128,22 +128,21 @@ def get_market_data():
                 # Ensure outputsize is sufficient for the indicator period
                 # Fetch at least 2x the period for safety, or a minimum of 50 if period is small
                 required_outputsize = max(indicator_period * 2, 50) 
-                if outputsize:
+                if outputsize: # If outputsize is provided by AI agent, use it if sufficient
                     try:
-                        # Convert to float first to handle "7.0", then to int
                         outputsize = int(float(outputsize)) 
                     except (ValueError, TypeError):
                         return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
                     outputsize = max(outputsize, required_outputsize)
-                else:
+                else: # If outputsize not provided, use calculated required_outputsize
                     outputsize = required_outputsize
                 print(f"Adjusted 'outputsize' to '{outputsize}' for indicator calculation.")
             else: # data_type == 'historical'
+                # For general historical data, default to a reasonable outputsize if not provided
                 if not outputsize:
-                    outputsize = '1'
+                    outputsize = '50' # Default to 50 data points for candlestick analysis
                     print(f"Defaulting 'outputsize' to '{outputsize}' for historical data.")
                 try:
-                    # Convert to float first to handle "7.0", then to int
                     outputsize = int(float(outputsize)) 
                 except (ValueError, TypeError):
                     return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
@@ -173,18 +172,15 @@ def get_market_data():
             readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper()
 
             if data_type == 'historical':
-                latest_data = historical_values[0] # Most recent data point is first from API
-                latest_close = latest_data.get('close')
-                datetime_str = latest_data.get('datetime')
-                if latest_close is not None and datetime_str is not None:
-                    try:
-                        formatted_close = f"${float(latest_close):,.2f}"
-                        return jsonify({"text": f"The latest closing price for {readable_symbol} at {datetime_str} was {formatted_close}. You requested {len(historical_values)} data points."})
-                    except ValueError:
-                        print(f"Twelve Data returned invalid historical price format for {symbol}: {latest_close}")
-                        return jsonify({"text": f"Could not parse historical price for {symbol}. Invalid format received."}), 500
-                else:
-                    return jsonify({"text": f"Historical data for {readable_symbol} found, but latest closing price or datetime could not be extracted."})
+                # Simplified response for historical data to avoid overwhelming AI agent
+                # The AI agent should use its own capabilities to interpret "candlestick analysis"
+                # based on knowing it has access to this data.
+                response_text = (
+                    f"I have retrieved {len(historical_values)} data points for {readable_symbol} "
+                    f"at {interval} intervals, covering from {df['datetime'].iloc[0]} to {df['datetime'].iloc[-1]}. "
+                    f"This data includes Open, High, Low, and Close prices, which can be used for candlestick analysis."
+                )
+                return jsonify({"text": response_text.strip()})
             
             elif data_type == 'indicator':
                 indicator_value = None
@@ -212,17 +208,17 @@ def get_market_data():
                     if len(df) < 34: # MACD typically needs at least 26 (slow EMA) + some buffer
                         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
                     
-                    # This version has the 'window_sign' error
-                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26, window_sign=9)
-                    macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9)
-                    macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9)
+                    # FIX: Corrected parameter names for ta.trend.macd
+                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26, window_signal=9)
+                    macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_signal=9)
+                    macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_signal=9)
                     
                     indicator_value = {
                         'MACD_Line': macd_line.iloc[-1],
                         'Signal_Line': macd_signal_line.iloc[-1],
                         'Histogram': macd_histogram.iloc[-1]
                     }
-                    indicator_description = "Moving Average Convergence Divergence"
+                    indicator_description = "Moving Average Convergence D-I-vergence" # Added hyphen for better vocalization
                 else:
                     return jsonify({"text": f"Error: Indicator '{indicator}' not supported. Supported indicators: SMA, EMA, RSI, MACD."}), 400
 
