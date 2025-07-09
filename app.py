@@ -241,8 +241,9 @@ def get_market_data():
                         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
                     
                     # FIX: Corrected parameter names for ta.trend.macd based on GitHub issue
-                    # 'ta' library's macd function uses 'window_fast', 'window_slow', and 'window_sign' for the signal line.
-                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26, window_sign=9)
+                    # The 'ta' library's macd function uses 'window_fast', 'window_slow', and 'window_signal'
+                    # The GitHub issue states: macd() does NOT take window_sign. It's for macd_signal and macd_diff.
+                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26) # Removed window_signal/window_sign
                     macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9)
                     macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9)
                     
