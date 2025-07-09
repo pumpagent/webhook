@@ -240,11 +240,11 @@ def get_market_data():
                     if len(df) < 34:
                         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
                     
-                    # FIX: Corrected parameter names for ta.trend.macd
-                    # The 'ta' library's macd function uses 'window_fast', 'window_slow', and 'window_signal'
-                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26, window_signal=9)
-                    macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_signal=9)
-                    macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_signal=9)
+                    # FIX: Corrected parameter names for ta.trend.macd based on GitHub issue
+                    # 'ta' library's macd function uses 'window_fast', 'window_slow', and 'window_sign' for the signal line.
+                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26, window_sign=9)
+                    macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9)
+                    macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9)
                     
                     indicator_value = {
                         'MACD_Line': macd_line.iloc[-1],
