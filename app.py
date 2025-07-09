@@ -20,13 +20,15 @@ last_twelve_data_call = 0
 last_news_api_call = 0
 
 # Minimum time (in seconds) between calls to each API
+# Adjust these values based on the free tier limits of Twelve Data and NewsAPI.org
+# A conservative limit for free tiers might be 5-10 seconds to avoid hitting limits too quickly.
 TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between Twelve Data calls)
 NEWS_API_MIN_INTERVAL = 10    # seconds (e.g., 10 seconds between NewsAPI calls)
 
 # Simple in-memory cache for recent responses
 # { (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language): {'response_json': {}, 'timestamp': float} }
 api_response_cache = {}
-CACHE_DURATION = 60 # Cache responses for 60 seconds
+CACHE_DURATION = 300 # NEW: Cache responses for 300 seconds (5 minutes) to reduce API calls
 
 # Define the webhook endpoint
 @app.route('/market_data', methods=['GET']) # Endpoint for all data types
@@ -34,6 +36,7 @@ def get_market_data():
     """
     This endpoint fetches live price, historical data, technical analysis indicators,
     or market news using Twelve Data and NewsAPI.org.
+    It includes rate limiting and caching to manage API call frequency.
 
     Required parameters:
     - 'symbol': Ticker symbol (e.g., 'BTC/USD', 'AAPL') for price/TA, or
@@ -58,19 +61,18 @@ def get_market_data():
 
     Returns: Formatted string within a JSON object for Eleven Labs.
     """
+    global last_twelve_data_call, last_news_api_call # Declare global to modify timestamps
+
     # Get parameters from the request
     symbol = request.args.get('symbol') # Used for price/TA
     data_type = request.args.get('data_type', 'live').lower()
 
-    # Parameters for price/TA (historical/indicator)
     interval = request.args.get('interval')
-    outputsize = request.args.get('outputsize') # Only relevant for historical, not direct indicator calls
+    outputsize = request.args.get('outputsize')
 
-    # Parameters for indicator
-    indicator = request.args.get('indicator') # Old parameter name
-    indicator_period = request.args.get('indicator_period') # Old parameter name
+    indicator = request.args.get('indicator')
+    indicator_period = request.args.get('indicator_period')
 
-    # Parameters for news
     news_query = request.args.get('news_query')
     from_date = request.args.get('from_date')
     sort_by = request.args.get('sort_by', 'publishedAt')
@@ -98,10 +100,11 @@ def get_market_data():
 
         if data_type == 'live':
             # --- Rate Limiting for Twelve Data ---
-            if (time.time() - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
-                time_to_wait = TWELVE_DATA_MIN_INTERVAL - (time.time() - last_twelve_data_call)
+            if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
+                time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
                 print(f"Rate limit hit for Twelve Data. Waiting {time_to_wait:.2f} seconds.")
-                return jsonify({"text": f"Please wait a moment. I'm fetching new data, but there's a slight delay due to API limits. Try again in {int(time_to_wait) + 1} seconds."}), 429 # 429 Too Many Requests
+                # NEW: More conversational rate limit message
+                return jsonify({"text": f"I'm currently experiencing high demand for live market data. Please give me about {int(time_to_wait) + 1} seconds and try again."}), 429
             
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for live price. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
@@ -132,10 +135,11 @@ def get_market_data():
 
         elif data_type == 'historical' or data_type == 'indicator':
             # --- Rate Limiting for Twelve Data ---
-            if (time.time() - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
+            if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
                 time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
                 print(f"Rate limit hit for Twelve Data. Waiting {time_to_wait:.2f} seconds.")
-                return jsonify({"text": f"Please wait a moment. I'm fetching new data, but there's a slight delay due to API limits. Try again in {int(time_to_wait) + 1} seconds."}), 429 # 429 Too Many Requests
+                # NEW: More conversational rate limit message
+                return jsonify({"text": f"I'm currently experiencing high demand for market data. Please give me about {int(time_to_wait) + 1} seconds and try again."}), 429
 
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for historical data. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
