@@ -279,7 +279,7 @@ def get_market_data():
                             if indicator_value_td is not None:
                                 try:
                                     formatted_value_td = f"{float(indicator_value_td):,.2f}"
-                                    response_data = {"text": f"The {indicator_name_upper} ({indicator_period}-period, {interval}) for {readable_symbol} is {formatted_value_td} (from Twelve Data)."}
+                                    response_data = {"text": f"The {indicator_name_upper} ({indicator_period}-period, {interval}) for {readable_symbol} is {formatted_value_td}."} # Removed "(from Twelve Data)"
                                 except ValueError:
                                     print(f"Twelve Data returned invalid indicator format for {indicator_name}: {indicator_value_td}")
                                     return jsonify({"text": f"Could not parse {indicator_name} for {readable_symbol}. Invalid format received from Twelve Data."}), 500
@@ -296,7 +296,7 @@ def get_market_data():
                                         f"The MACD for {readable_symbol} ({interval}) is: "
                                         f"MACD Line: {float(macd_line_td):,.2f}, "
                                         f"Signal Line: {float(macd_signal_td):,.2f}, "
-                                        f"Histogram: {float(macd_diff_td):,.2f} (from Twelve Data)."
+                                        f"Histogram: {float(macd_diff_td):,.2f}." # Removed "(from Twelve Data)"
                                     )
                                     response_data = {"text": response_text}
                                 except ValueError:
