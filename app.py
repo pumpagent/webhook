@@ -241,14 +241,26 @@ def get_market_data():
                         if len(df) < indicator_period:
                             return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. Need at least {indicator_period} data points."}), 400
                         
-                        df['BBL'] = ta.volatility.bollinger_lband(df['close'], window=indicator_period, window_dev=window_dev)
-                        df['BBM'] = ta.volatility.bollinger_mband(df['close'], window=indicator_period, window_dev=window_dev)
-                        df['BBU'] = ta.volatility.bollinger_hband(df['close'], window=indicator_period, window_dev=window_dev)
+                        # Calculate all bands at once
+                        # The ta.volatility.bollinger_bands function returns a tuple of Series (hband, lband, mband)
+                        # We need to explicitly call the individual band functions
+                        bb_hband = ta.volatility.bollinger_hband(df['close'], window=indicator_period, window_dev=window_dev)
+                        bb_mband = ta.volatility.bollinger_mband(df['close'], window=indicator_period, window_dev=window_dev)
+                        bb_lband = ta.volatility.bollinger_lband(df['close'], window=indicator_period, window_dev=window_dev)
+
+                        # Get the last non-NaN value for each band
+                        upper_band = bb_hband.iloc[-1]
+                        middle_band = bb_mband.iloc[-1]
+                        lower_band = bb_lband.iloc[-1]
+
+                        # Check for NaN values, which can occur if not enough data points for the period
+                        if pd.isna(upper_band) or pd.isna(middle_band) or pd.isna(lower_band):
+                            return jsonify({"text": f"Could not calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. The data series might be too short or contain invalid values for the period."}), 500
 
                         indicator_value = {
-                            'Upper_Band': df['BBU'].iloc[-1],
-                            'Middle_Band': df['BBM'].iloc[-1],
-                            'Lower_Band': df['BBL'].iloc[-1]
+                            'Upper_Band': upper_band,
+                            'Middle_Band': middle_band,
+                            'Lower_Band': lower_band
                         }
                         indicator_description = f"{indicator_period}-period Bollinger Bands"
                     else:
@@ -335,7 +347,7 @@ def get_market_data():
                                         f"The {indicator_period}-period Bollinger Bands for {readable_symbol} ({interval}) are: "
                                         f"Upper Band: {float(upper_band_td):,.2f}, "
                                         f"Middle Band: {float(middle_band_td):,.2f}, "
-                                        f"Lower Band: {float(lower_band_td):,.2f} (from Twelve Data)."
+                                        f"Lower Band: {float(lower_band_td):,.2f}." # Removed "(from Twelve Data)"
                                     )
                                     response_data = {"text": response_text}
                                 except ValueError:
@@ -374,7 +386,7 @@ def get_market_data():
                 f"apiKey={NEWS_API_KEY}"
             )
             print(f"Fetching news for '{news_query}' from NewsAPI.org (from: {from_date}, sort: {sort_by})...")
-            response = requests.get(news_api_url)
+            response = requests.get(api_url)
             response.raise_for_status()
             news_data = response.json()
 
