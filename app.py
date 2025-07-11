@@ -194,6 +194,8 @@ def get_market_data():
 
                     df = pd.DataFrame(historical_values)
                     df['close'] = pd.to_numeric(df['close'])
+                    df['high'] = pd.to_numeric(df['high']) # Ensure high is numeric for BBANDS
+                    df['low'] = pd.to_numeric(df['low'])   # Ensure low is numeric for BBANDS
                     df = df.iloc[::-1].reset_index(drop=True)
 
                     indicator_value = None
@@ -222,9 +224,7 @@ def get_market_data():
                         if len(df) < 34:
                             return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
                         
-                        # Corrected parameter names for ta.trend.macd based on GitHub issue
-                        # The 'ta' library's macd function uses 'window_fast', 'window_slow', and 'window_signal'
-                        macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26) # Removed window_signal/window_sign
+                        macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26)
                         macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9)
                         macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9)
                         
@@ -234,8 +234,25 @@ def get_market_data():
                             'Histogram': macd_histogram.iloc[-1]
                         }
                         indicator_description = "Moving Average Convergence D-I-vergence"
+                    elif indicator_name == 'BBANDS': # NEW: Bollinger Bands
+                        # ta.volatility.bollinger_bands requires close, window, window_dev
+                        # Default window_dev to 2 (standard deviation)
+                        window_dev = 2 # Standard deviation for Bollinger Bands
+                        if len(df) < indicator_period:
+                            return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. Need at least {indicator_period} data points."}), 400
+                        
+                        df['BBL'] = ta.volatility.bollinger_lband(df['close'], window=indicator_period, window_dev=window_dev)
+                        df['BBM'] = ta.volatility.bollinger_mband(df['close'], window=indicator_period, window_dev=window_dev)
+                        df['BBU'] = ta.volatility.bollinger_hband(df['close'], window=indicator_period, window_dev=window_dev)
+
+                        indicator_value = {
+                            'Upper_Band': df['BBU'].iloc[-1],
+                            'Middle_Band': df['BBM'].iloc[-1],
+                            'Lower_Band': df['BBL'].iloc[-1]
+                        }
+                        indicator_description = f"{indicator_period}-period Bollinger Bands"
                     else:
-                        return jsonify({"text": f"Error: Indicator '{indicator}' not supported for local calculation. Supported: SMA, EMA, RSI, MACD."}), 400
+                        return jsonify({"text": f"Error: Indicator '{indicator}' not supported for local calculation. Supported: SMA, EMA, RSI, MACD, BBANDS."}), 400
 
                     if indicator_value is not None:
                         if isinstance(indicator_value, dict):
@@ -306,6 +323,26 @@ def get_market_data():
                                     return jsonify({"text": f"Could not parse MACD values for {readable_symbol}. Invalid format received from Twelve Data."}), 500
                             else:
                                 return jsonify({"text": f"Could not find all MACD components for {readable_symbol} in Twelve Data API response."})
+                        elif indicator_name_upper == 'BBANDS': # NEW: Bollinger Bands for Twelve Data direct
+                            # Twelve Data's direct BBANDS endpoint returns 'upper', 'middle', 'lower'
+                            upper_band_td = latest_indicator_data_td.get('upper')
+                            middle_band_td = latest_indicator_data_td.get('middle')
+                            lower_band_td = latest_indicator_data_td.get('lower')
+                            
+                            if all(v is not None for v in [upper_band_td, middle_band_td, lower_band_td]):
+                                try:
+                                    response_text = (
+                                        f"The {indicator_period}-period Bollinger Bands for {readable_symbol} ({interval}) are: "
+                                        f"Upper Band: {float(upper_band_td):,.2f}, "
+                                        f"Middle Band: {float(middle_band_td):,.2f}, "
+                                        f"Lower Band: {float(lower_band_td):,.2f} (from Twelve Data)."
+                                    )
+                                    response_data = {"text": response_text}
+                                except ValueError:
+                                    print(f"Twelve Data returned invalid BBANDS format: {latest_indicator_data_td}")
+                                    return jsonify({"text": f"Could not parse Bollinger Bands for {readable_symbol}. Invalid format received from Twelve Data."}), 500
+                            else:
+                                return jsonify({"text": f"Could not find all Bollinger Bands components for {readable_symbol} in Twelve Data API response."})
                         else:
                             return jsonify({"text": f"Error: Indicator '{indicator}' not supported for direct Twelve Data fetching."}), 400
                     else:
