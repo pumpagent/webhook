@@ -20,8 +20,8 @@ last_twelve_data_call = 0
 last_news_api_call = 0
 
 # Minimum time (in seconds) between calls to each API
-TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between Twelve Data calls)
-NEWS_API_MIN_INTERVAL = 1    # seconds (e.g., 10 seconds between NewsAPI calls)
+TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between Twelve Data calls)
+NEWS_API_MIN_INTERVAL = 10    # seconds (e.g., 10 seconds between NewsAPI calls)
 
 # Simple in-memory cache for recent responses
 # { (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language, indicator_source): {'response_json': {}, 'timestamp': float} }
@@ -45,7 +45,7 @@ def get_market_data():
     For 'historical' or 'indicator' data:
     - 'interval': Time interval (e.g., '1min', '1day'). Defaults to '1day'.
     - 'outputsize': Number of data points. Defaults to '50' for historical, adjusted for indicator.
-    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS').
+    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS', 'BOLLINGER-BANDS').
                    Requires 'data_type' to be 'indicator'.
     - 'indicator_period': Period for the indicator (e.g., '14', '20', '50').
                           Required if 'indicator' is specified.
@@ -234,27 +234,21 @@ def get_market_data():
                             'Histogram': macd_histogram.iloc[-1]
                         }
                         indicator_description = "Moving Average Convergence D-I-vergence"
-                    elif indicator_name == 'BBANDS': # NEW: Bollinger Bands
-                        # ta.volatility.bollinger_bands requires close, window, window_dev
-                        # Default window_dev to 2 (standard deviation)
+                    elif indicator_name == 'BBANDS': # Bollinger Bands
                         window_dev = 2 # Standard deviation for Bollinger Bands
                         if len(df) < indicator_period:
                             return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. Need at least {indicator_period} data points."}), 400
                         
-                        # Calculate all bands at once
-                        # The ta.volatility.bollinger_bands function returns a tuple of Series (hband, lband, mband)
-                        # We need to explicitly call the individual band functions
                         bb_hband = ta.volatility.bollinger_hband(df['close'], window=indicator_period, window_dev=window_dev)
                         bb_mband = ta.volatility.bollinger_mband(df['close'], window=indicator_period, window_dev=window_dev)
                         bb_lband = ta.volatility.bollinger_lband(df['close'], window=indicator_period, window_dev=window_dev)
 
-                        # Get the last non-NaN value for each band
                         upper_band = bb_hband.iloc[-1]
                         middle_band = bb_mband.iloc[-1]
                         lower_band = bb_lband.iloc[-1]
 
-                        # Check for NaN values, which can occur if not enough data points for the period
                         if pd.isna(upper_band) or pd.isna(middle_band) or pd.isna(lower_band):
+                            # This error message is returned if calculation results in NaN
                             return jsonify({"text": f"Could not calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. The data series might be too short or contain invalid values for the period."}), 500
 
                         indicator_value = {
@@ -277,9 +271,8 @@ def get_market_data():
                     else:
                         return jsonify({"text": f"Could not calculate {indicator_name} for {readable_symbol}. Data might be insufficient or invalid for local calculation."}), 500
 
-                elif indicator_source == 'twelvedata': # NEW: Fetch indicator directly from Twelve Data API
+                elif indicator_source == 'twelvedata': # Fetch indicator directly from Twelve Data API
                     indicator_name_lower = indicator.lower()
-                    # Twelve Data often uses 'time_period' for indicator period
                     api_url = (
                         f"https://api.twelvedata.com/{indicator_name_lower}?"
                         f"symbol={symbol}&"
@@ -299,12 +292,11 @@ def get_market_data():
                     
                     indicator_values_td = data.get('values')
                     if indicator_values_td:
-                        latest_indicator_data_td = indicator_values_td[0] # Most recent data point is usually first
+                        latest_indicator_data_td = indicator_values_td[0]
                         
                         readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper()
                         indicator_name_upper = indicator.upper()
 
-                        # Parse based on expected Twelve Data response structure for common indicators
                         if indicator_name_upper in ['SMA', 'EMA', 'RSI']:
                             indicator_value_td = latest_indicator_data_td.get(indicator_name_lower)
                             if indicator_value_td is not None:
@@ -335,7 +327,7 @@ def get_market_data():
                                     return jsonify({"text": f"Could not parse MACD values for {readable_symbol}. Invalid format received from Twelve Data."}), 500
                             else:
                                 return jsonify({"text": f"Could not find all MACD components for {readable_symbol} in Twelve Data API response."})
-                        elif indicator_name_upper == 'BBANDS': # NEW: Bollinger Bands for Twelve Data direct
+                        elif indicator_name_upper == 'BBANDS': # Bollinger Bands for Twelve Data direct
                             # Twelve Data's direct BBANDS endpoint returns 'upper', 'middle', 'lower'
                             upper_band_td = latest_indicator_data_td.get('upper')
                             middle_band_td = latest_indicator_data_td.get('middle')
@@ -347,7 +339,7 @@ def get_market_data():
                                         f"The {indicator_period}-period Bollinger Bands for {readable_symbol} ({interval}) are: "
                                         f"Upper Band: {float(upper_band_td):,.2f}, "
                                         f"Middle Band: {float(middle_band_td):,.2f}, "
-                                        f"Lower Band: {float(lower_band_td):,.2f}." # Removed "(from Twelve Data)"
+                                        f"Lower Band: {float(lower_band_td):,.2f}."
                                     )
                                     response_data = {"text": response_text}
                                 except ValueError:
