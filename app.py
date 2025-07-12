@@ -20,8 +20,8 @@ last_twelve_data_call = 0
 last_news_api_call = 0
 
 # Minimum time (in seconds) between calls to each API
-TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between Twelve Data calls)
-NEWS_API_MIN_INTERVAL = 10    # seconds (e.g., 10 seconds between NewsAPI calls)
+TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between Twelve Data calls)
+NEWS_API_MIN_INTERVAL = 1   # seconds (e.g., 10 seconds between NewsAPI calls)
 
 # Simple in-memory cache for recent responses
 # { (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language, indicator_source): {'response_json': {}, 'timestamp': float} }
@@ -132,6 +132,9 @@ def get_market_data():
             globals()['last_twelve_data_call'] = time.time() # Update last call timestamp
 
         elif data_type == 'historical' or data_type == 'indicator':
+            # Define readable_symbol early to ensure it's always available for error messages
+            readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() if symbol else "N/A" # FIX: Define readable_symbol here
+
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for historical data. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
             
@@ -212,7 +215,7 @@ def get_market_data():
 
                     indicator_value = None
                     # indicator_name = indicator.upper() # Moved this line up
-                    readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper()
+                    # readable_symbol is defined at the top of this block
 
                     if indicator_name == 'SMA':
                         if len(df) < indicator_period:
@@ -338,7 +341,7 @@ def get_market_data():
                     if indicator_values_td:
                         latest_indicator_data_td = indicator_values_td[0]
                         
-                        readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper()
+                        # readable_symbol is defined at the top of this block
                         indicator_name_upper = indicator.upper()
 
                         if indicator_name_upper in ['SMA', 'EMA', 'RSI']:
@@ -400,7 +403,9 @@ def get_market_data():
             globals()['last_twelve_data_call'] = time.time() # Update last call timestamp
 
         elif data_type == 'news':
-            # --- Rate Limiting for NewsAPI ---
+            # Define readable_symbol here as well for consistency in error messages
+            readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() if symbol else "N/A" # FIX: Define readable_symbol here too
+
             if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
                 time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
                 print(f"Rate limit hit for NewsAPI. Waiting {time_to_wait:.2f} seconds.")
