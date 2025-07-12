@@ -193,19 +193,24 @@ def get_market_data():
                         return jsonify({"text": f"No data found for {symbol} with the specified interval and output size for local indicator calculation. The symbol or parameters might be incorrect."}), 500
 
                     df = pd.DataFrame(historical_values)
-                    df['close'] = pd.to_numeric(df['close'])
-                    df['high'] = pd.to_numeric(df['high']) # Ensure high is numeric for BBANDS
-                    df['low'] = pd.to_numeric(df['low'])   # Ensure low is numeric for BBANDS
-                    df['open'] = pd.to_numeric(df['open']) # Ensure open is numeric for PVT
-                    df['volume'] = pd.to_numeric(df['volume']) # Ensure volume is numeric for PVT
-                    
-                    # Check if 'volume' column exists and is not all NaNs for PVT
-                    if 'volume' not in df.columns or df['volume'].isnull().all():
-                        if indicator_name == 'PVT':
-                            return jsonify({"text": f"Error: Volume data is missing or invalid for {readable_symbol}. Cannot calculate Price Volume Trend."}), 400
-                        # For other indicators, proceed if volume is not strictly required
-                        print(f"Warning: Volume data missing for {readable_symbol}, but not critical for {indicator_name}.")
+                    # Convert necessary columns to numeric, handling potential missing data
+                    for col in ['close', 'high', 'low', 'open', 'volume']:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors='coerce') # 'coerce' turns invalid parsing into NaN
+                        else:
+                            df[col] = pd.NA # Add missing column as NA
 
+                    # Drop rows with NaN in critical columns for TA calculation
+                    df.dropna(subset=['close', 'high', 'low', 'open'], inplace=True)
+                    if df.empty:
+                        return jsonify({"text": f"Error: Insufficient valid OHLCV data for {readable_symbol} after cleaning. Cannot calculate indicators."}), 500
+                    
+                    # Check if 'volume' column has enough non-NaN values for volume-based indicators
+                    if 'volume' in df.columns and df['volume'].isnull().all():
+                        if indicator_name in ['PVT']: # Add other volume-based indicators here if needed
+                            return jsonify({"text": f"Error: Volume data is missing or entirely invalid for {readable_symbol}. Cannot calculate {indicator_name}."}), 400
+                        print(f"Warning: Volume data missing or invalid for {readable_symbol}, but not critical for {indicator_name}.")
+                    
                     df = df.iloc[::-1].reset_index(drop=True)
 
                     indicator_value = None
@@ -269,7 +274,7 @@ def get_market_data():
                     elif indicator_name == 'PVT': # Price Volume Trend
                         if len(df) < 2:
                             return jsonify({"text": f"Not enough data points ({len(df)}) to calculate Price Volume Trend for {readable_symbol}. Need at least 2 data points."}), 400
-                        if 'volume' not in df.columns or df['volume'].isnull().all():
+                        if 'volume' not in df.columns or df['volume'].isnull().all(): # Re-check volume after cleaning
                              return jsonify({"text": f"Error: Volume data is missing or invalid for {readable_symbol}. Cannot calculate Price Volume Trend."}), 400
                         
                         df['PVT'] = ta.volume.pvt(df['close'], df['volume'])
