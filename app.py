@@ -132,12 +132,6 @@ def get_market_data():
             globals()['last_twelve_data_call'] = time.time() # Update last call timestamp
 
         elif data_type == 'historical' or data_type == 'indicator':
-            # --- Rate Limiting for Twelve Data ---
-            if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
-                time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
-                print(f"Rate limit hit for Twelve Data. Waiting {time_to_wait:.2f} seconds.")
-                return jsonify({"text": f"Please wait a moment. I'm fetching new data, but there's a slight delay due to API limits. Try again in {int(time_to_wait) + 1} seconds."}), 429
-
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for historical data. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
             
@@ -165,6 +159,9 @@ def get_market_data():
 
                 # Handle indicator source: local (pandas/ta) vs. twelvedata API
                 if indicator_source == 'local': # Use pandas/ta for local calculation
+                    # Assign indicator_name here, before it's used in checks
+                    indicator_name = indicator.upper() # Moved this line up
+
                     required_outputsize = max(indicator_period * 2, 50) 
                     if outputsize:
                         try:
@@ -214,7 +211,7 @@ def get_market_data():
                     df = df.iloc[::-1].reset_index(drop=True)
 
                     indicator_value = None
-                    indicator_name = indicator.upper()
+                    # indicator_name = indicator.upper() # Moved this line up
                     readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper()
 
                     if indicator_name == 'SMA':
