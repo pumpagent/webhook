@@ -198,6 +198,14 @@ def get_market_data():
                     df['low'] = pd.to_numeric(df['low'])   # Ensure low is numeric for BBANDS
                     df['open'] = pd.to_numeric(df['open']) # Ensure open is numeric for PVT
                     df['volume'] = pd.to_numeric(df['volume']) # Ensure volume is numeric for PVT
+                    
+                    # Check if 'volume' column exists and is not all NaNs for PVT
+                    if 'volume' not in df.columns or df['volume'].isnull().all():
+                        if indicator_name == 'PVT':
+                            return jsonify({"text": f"Error: Volume data is missing or invalid for {readable_symbol}. Cannot calculate Price Volume Trend."}), 400
+                        # For other indicators, proceed if volume is not strictly required
+                        print(f"Warning: Volume data missing for {readable_symbol}, but not critical for {indicator_name}.")
+
                     df = df.iloc[::-1].reset_index(drop=True)
 
                     indicator_value = None
@@ -258,17 +266,17 @@ def get_market_data():
                             'Lower_Band': lower_band
                         }
                         indicator_description = f"{indicator_period}-period Bollinger Bands"
-                    elif indicator_name == 'PVT': # NEW: Price Volume Trend
-                        if len(df) < 2: # PVT needs at least 2 data points
+                    elif indicator_name == 'PVT': # Price Volume Trend
+                        if len(df) < 2:
                             return jsonify({"text": f"Not enough data points ({len(df)}) to calculate Price Volume Trend for {readable_symbol}. Need at least 2 data points."}), 400
+                        if 'volume' not in df.columns or df['volume'].isnull().all():
+                             return jsonify({"text": f"Error: Volume data is missing or invalid for {readable_symbol}. Cannot calculate Price Volume Trend."}), 400
                         
                         df['PVT'] = ta.volume.pvt(df['close'], df['volume'])
                         indicator_value = df['PVT'].iloc[-1]
                         indicator_description = "Price Volume Trend"
-                    elif indicator_name == 'STOCHRSI': # NEW: Stochastic RSI
-                        # STOCHRSI typically needs window_rsi, window_stoch, window_k, window_d
-                        # Defaulting to common values: 14, 14, 3, 3
-                        window_rsi = indicator_period # Use indicator_period for window_rsi
+                    elif indicator_name == 'STOCHRSI': # Stochastic RSI
+                        window_rsi = indicator_period
                         window_stoch = 14
                         window_k = 3
                         window_d = 3
