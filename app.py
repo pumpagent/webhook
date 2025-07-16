@@ -46,7 +46,7 @@ def get_market_data():
     - 'outputsize': Number of data points. Defaults to '50'.
 
     For 'indicator' data:
-    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS').
+    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS', 'STOCH').
                    Requires 'data_type' to be 'indicator'.
     - 'indicator_period': Period for the indicator (e.g., '14', '20', '50').
                           Required if 'indicator' is specified.
@@ -168,13 +168,39 @@ def get_market_data():
 
                 # Now, directly call Twelve Data's indicator endpoint
                 indicator_name_lower = indicator.lower()
-                api_url = (
-                    f"https://api.twelvedata.com/{indicator_name_lower}?"
-                    f"symbol={symbol}&"
-                    f"interval={interval}&"
-                    f"time_period={indicator_period}&" # Use time_period for indicator period
-                    f"apikey={TWELVE_DATA_API_KEY}"
-                )
+                
+                # Adjust API URL and parsing based on specific indicator requirements for Twelve Data
+                if indicator_name_lower == 'macd':
+                    api_url = (
+                        f"https://api.twelvedata.com/macd?"
+                        f"symbol={symbol}&"
+                        f"interval={interval}&"
+                        f"fast_period=12&slow_period=26&signal_period=9&" # Using Twelve Data's default periods
+                        f"apikey={TWELVE_DATA_API_KEY}"
+                    )
+                elif indicator_name_lower == 'bbands':
+                    api_url = (
+                        f"https://api.twelvedata.com/bbands?"
+                        f"symbol={symbol}&"
+                        f"interval={interval}&"
+                        f"time_period={indicator_period}&"
+                        f"std_dev=2&" # Standard deviation for BBANDS
+                        f"apikey={TWELVE_DATA_API_KEY}"
+                    )
+                elif indicator_name_lower in ['sma', 'ema', 'rsi', 'stoch']: # Added 'stoch' here
+                    api_url = (
+                        f"https://api.twelvedata.com/{indicator_name_lower}?"
+                        f"symbol={symbol}&"
+                        f"interval={interval}&"
+                        f"time_period={indicator_period}&" # Use time_period for indicator period
+                        f"apikey={TWELVE_DATA_API_KEY}"
+                    )
+                # Handle indicators not directly available from Twelve Data's API
+                elif indicator_name_lower in ['pvt', 'stochrsi']: # PVT and STOCHRSI are not direct endpoints
+                     return jsonify({"text": f"Error: {indicator.upper()} is not available as a direct indicator from Twelve Data API. Please select a different indicator."}), 400
+                else:
+                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported for direct Twelve Data fetching. Supported: SMA, EMA, RSI, MACD, BBANDS, STOCH."}), 400 # Updated supported list
+
                 print(f"Fetching {indicator} for {symbol} (period: {indicator_period}, interval: {interval}) from Twelve Data API directly...")
                 response = requests.get(api_url)
                 response.raise_for_status()
@@ -200,8 +226,8 @@ def get_market_data():
                             except ValueError:
                                 print(f"Twelve Data returned invalid indicator format for {indicator_name}: {indicator_value_td}")
                                 return jsonify({"text": f"Could not parse {indicator_name} for {readable_symbol}. Invalid format received from Twelve Data."}), 500
-                        else:
-                            return jsonify({"text": f"Could not find {indicator_name_upper} value for {readable_symbol} in Twelve Data API response."})
+                            else:
+                                return jsonify({"text": f"Could not find {indicator_name_upper} value for {readable_symbol} in Twelve Data API response."})
                     elif indicator_name_upper == 'MACD':
                         macd_line_td = latest_indicator_data_td.get('macd')
                         macd_signal_td = latest_indicator_data_td.get('macd_signal')
@@ -221,37 +247,48 @@ def get_market_data():
                                 return jsonify({"text": f"Could not parse MACD values for {readable_symbol}. Invalid format received from Twelve Data."}), 500
                             else:
                                 return jsonify({"text": f"Could not find all MACD components for {readable_symbol} in Twelve Data API response."})
-                        elif indicator_name_upper == 'BBANDS': # Bollinger Bands for Twelve Data direct
-                            # Twelve Data's direct BBANDS endpoint returns 'upper', 'middle', 'lower'
-                            upper_band_td = latest_indicator_data_td.get('upper')
-                            middle_band_td = latest_indicator_data_td.get('middle')
-                            lower_band_td = latest_indicator_data_td.get('lower')
-                            
-                            if all(v is not None for v in [upper_band_td, middle_band_td, lower_band_td]):
-                                try:
-                                    response_text = (
-                                        f"The {indicator_period}-period Bollinger Bands for {readable_symbol} ({interval}) are: "
-                                        f"Upper Band: {float(upper_band_td):,.2f}, "
-                                        f"Middle Band: {float(middle_band_td):,.2f}, "
-                                        f"Lower Band: {float(lower_band_td):,.2f}."
-                                    )
-                                    response_data = {"text": response_text}
-                                except ValueError:
-                                    print(f"Twelve Data returned invalid BBANDS format: {latest_indicator_data_td}")
-                                    return jsonify({"text": f"Could not parse Bollinger Bands for {readable_symbol}. Invalid format received from Twelve Data."}), 500
+                    elif indicator_name_upper == 'BBANDS': # Bollinger Bands for Twelve Data direct
+                        upper_band_td = latest_indicator_data_td.get('upper')
+                        middle_band_td = latest_indicator_data_td.get('middle')
+                        lower_band_td = latest_indicator_data_td.get('lower')
+                        
+                        if all(v is not None for v in [upper_band_td, middle_band_td, lower_band_td]):
+                            try:
+                                response_text = (
+                                    f"The {indicator_period}-period Bollinger Bands for {readable_symbol} ({interval}) are: "
+                                    f"Upper Band: {float(upper_band_td):,.2f}, "
+                                    f"Middle Band: {float(middle_band_td):,.2f}, "
+                                    f"Lower Band: {float(lower_band_td):,.2f}."
+                                )
+                                response_data = {"text": response_text}
+                            except ValueError:
+                                print(f"Twelve Data returned invalid BBANDS format: {latest_indicator_data_td}")
+                                return jsonify({"text": f"Could not parse Bollinger Bands for {readable_symbol}. Invalid format received from Twelve Data."}), 500
                             else:
                                 return jsonify({"text": f"Could not find all Bollinger Bands components for {readable_symbol} in Twelve Data API response."})
-                        # NEW: PVT and STOCHRSI for Twelve Data direct (check if Twelve Data has direct endpoints for these)
-                        elif indicator_name_upper == 'PVT':
-                             # Twelve Data does not have a direct /pvt endpoint. This would fail.
-                             return jsonify({"text": f"Error: Price Volume Trend (PVT) is not available as a direct indicator from Twelve Data API. Please use 'local' source for PVT."}), 400
-                        elif indicator_name_upper == 'STOCHRSI':
-                             # Twelve Data does not have a direct /stochrsi endpoint. This would fail.
-                             return jsonify({"text": f"Error: Stochastic RSI is not available as a direct indicator from Twelve Data API. Please use 'local' source for STOCHRSI."}), 400
+                    elif indicator_name_upper == 'STOCH': # NEW: Stochastic Oscillator from Twelve Data
+                        stoch_k_td = latest_indicator_data_td.get('stoch_k')
+                        stoch_d_td = latest_indicator_data_td.get('stoch_d')
+
+                        if all(v is not None for v in [stoch_k_td, stoch_d_td]):
+                            try:
+                                response_text = (
+                                    f"The {indicator_period}-period Stochastic Oscillator for {readable_symbol} ({interval}) is: "
+                                    f"Stoch K: {float(stoch_k_td):,.2f}, "
+                                    f"Stoch D: {float(stoch_d_td):,.2f}."
+                                )
+                                response_data = {"text": response_text}
+                            except ValueError:
+                                print(f"Twelve Data returned invalid STOCH format: {latest_indicator_data_td}")
+                                return jsonify({"text": f"Could not parse Stochastic Oscillator for {readable_symbol}. Invalid format received from Twelve Data."}), 500
+                            else:
+                                return jsonify({"text": f"Could not find Stochastic Oscillator components for {readable_symbol} in Twelve Data API response."})
                         else:
-                            return jsonify({"text": f"Error: Indicator '{indicator}' not supported for direct Twelve Data fetching. Supported: SMA, EMA, RSI, MACD, BBANDS."}), 400
+                            return jsonify({"text": f"No Stochastic Oscillator data found for {readable_symbol} in Twelve Data API response."}), 500
                     else:
-                        return jsonify({"text": f"No indicator data found for {indicator} for {symbol} with the specified parameters from Twelve Data API. The symbol or parameters might be incorrect."}), 500
+                        return jsonify({"text": f"Error: Indicator '{indicator}' not supported for direct Twelve Data fetching. Supported: SMA, EMA, RSI, MACD, BBANDS, STOCH."}), 400
+                else:
+                    return jsonify({"text": f"No indicator data found for {indicator} for {symbol} with the specified parameters from Twelve Data API. The symbol or parameters might be incorrect."}), 500
             else: # data_type == 'historical'
                 if not outputsize:
                     outputsize = '50' # Default to 50 data points for candlestick analysis
@@ -278,30 +315,11 @@ def get_market_data():
                     print(f"Twelve Data returned no values for {symbol}. Response: {data}")
                     return jsonify({"text": f"No data found for {symbol} with the specified interval and output size for local indicator calculation. The symbol or parameters might be incorrect."}), 500
 
-                df = pd.DataFrame(historical_values)
-                # Convert necessary columns to numeric, handling potential missing data
-                for col in ['close', 'high', 'low', 'open', 'volume']:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce') # 'coerce' turns invalid parsing into NaN
-                    else:
-                        df[col] = pd.NA # Add missing column as NA
-
-                # Drop rows with NaN in critical columns for TA calculation
-                df.dropna(subset=['close', 'high', 'low', 'open'], inplace=True)
-                if df.empty:
-                    return jsonify({"text": f"Error: Insufficient valid OHLCV data for {readable_symbol} after cleaning. Cannot calculate indicators."}), 500
-                
-                # Check if 'volume' column has enough non-NaN values for volume-based indicators
-                if 'volume' in df.columns and df['volume'].isnull().all():
-                    print(f"Warning: Volume data missing or invalid for {readable_symbol} for historical data.")
-                
-                df = df.iloc[::-1].reset_index(drop=True)
-
                 response_data = {
                     "text": (
                         f"I have retrieved {len(historical_values)} data points for {readable_symbol} "
-                        f"at {interval} intervals, covering from {df['datetime'].iloc[0]} to {df['datetime'].iloc[-1]}. "
-                        f"This data includes Open, High, Low, and Close prices, which can be used for candlestick analysis by the agent."
+                        f"at {interval} intervals, covering from {historical_values[0]['datetime']} to {historical_values[-1]['datetime']}. "
+                        f"This data includes Open, High, Low, Close, and Volume prices."
                     )
                 }
             globals()['last_twelve_data_call'] = time.time() # Update last call timestamp
