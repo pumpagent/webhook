@@ -19,8 +19,8 @@ last_twelve_data_call = 0
 last_news_api_call = 0
 
 # Minimum time (in seconds) between calls to each API
-TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between Twelve Data calls)
-NEWS_API_MIN_INTERVAL = 10    # seconds (e.g., 10 seconds between NewsAPI calls)
+TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between Twelve Data calls)
+NEWS_API_MIN_INTERVAL = 1   # seconds (e.g., 10 seconds between NewsAPI calls)
 
 # Simple in-memory cache for recent responses
 # { (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language): {'response_json': {}, 'timestamp': float} }
@@ -222,7 +222,8 @@ def get_market_data():
                         if indicator_value_td is not None:
                             try:
                                 formatted_value_td = f"{float(indicator_value_td):,.2f}"
-                                response_data = {"text": f"The {indicator_name_upper} ({indicator_period}-period, {interval}) for {readable_symbol} is {formatted_value_td}."}
+                                # NEW: Simplified response for single-value indicators
+                                response_data = {"text": f"The {indicator_name_upper} for {readable_symbol} is {formatted_value_td}."}
                             except ValueError:
                                 print(f"Twelve Data returned invalid indicator format for {indicator_name}: {indicator_value_td}")
                                 return jsonify({"text": f"Could not parse {indicator_name} for {readable_symbol}. Invalid format received from Twelve Data."}), 500
@@ -236,7 +237,7 @@ def get_market_data():
                         if all(v is not None for v in [macd_line_td, macd_signal_td, macd_diff_td]):
                             try:
                                 response_text = (
-                                    f"The MACD for {readable_symbol} ({interval}) is: "
+                                    f"The MACD for {readable_symbol} is: "
                                     f"MACD Line: {float(macd_line_td):,.2f}, "
                                     f"Signal Line: {float(macd_signal_td):,.2f}, "
                                     f"Histogram: {float(macd_diff_td):,.2f}."
@@ -255,7 +256,7 @@ def get_market_data():
                         if all(v is not None for v in [upper_band_td, middle_band_td, lower_band_td]):
                             try:
                                 response_text = (
-                                    f"The {indicator_period}-period Bollinger Bands for {readable_symbol} ({interval}) are: "
+                                    f"The Bollinger Bands for {readable_symbol} are: " # Simplified description
                                     f"Upper Band: {float(upper_band_td):,.2f}, "
                                     f"Middle Band: {float(middle_band_td):,.2f}, "
                                     f"Lower Band: {float(lower_band_td):,.2f}."
@@ -273,7 +274,7 @@ def get_market_data():
                         if all(v is not None for v in [stoch_k_td, stoch_d_td]):
                             try:
                                 response_text = (
-                                    f"The {indicator_period}-period Stochastic Oscillator for {readable_symbol} ({interval}) is: "
+                                    f"The Stochastic Oscillator for {readable_symbol} is: " # Simplified description
                                     f"Stoch K: {float(stoch_k_td):,.2f}, "
                                     f"Stoch D: {float(stoch_d_td):,.2f}."
                                 )
@@ -282,7 +283,7 @@ def get_market_data():
                                 print(f"Twelve Data returned invalid STOCH format: {latest_indicator_data_td}")
                                 return jsonify({"text": f"Could not parse Stochastic Oscillator for {readable_symbol}. Invalid format received from Twelve Data."}), 500
                             else:
-                                return jsonify({"text": f"No Stochastic Oscillator data found for {readable_symbol} in Twelve Data API response."})
+                                return jsonify({"text": f"No Stochastic Oscillator data found for {readable_symbol} in Twelve Data API response."}), 500
                         else:
                             return jsonify({"text": f"No Stochastic Oscillator data found for {readable_symbol} in Twelve Data API response."}), 500
                     else:
