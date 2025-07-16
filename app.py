@@ -19,8 +19,8 @@ last_twelve_data_call = 0
 last_news_api_call = 0
 
 # Minimum time (in seconds) between calls to each API
-TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between Twelve Data calls)
-NEWS_API_MIN_INTERVAL = 1    # seconds (e.g., 10 seconds between NewsAPI calls)
+TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between Twelve Data calls)
+NEWS_API_MIN_INTERVAL = 10    # seconds (e.g., 10 seconds between NewsAPI calls)
 
 # Simple in-memory cache for recent responses
 # { (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language): {'response_json': {}, 'timestamp': float} }
@@ -175,7 +175,7 @@ def get_market_data():
                         f"https://api.twelvedata.com/macd?"
                         f"symbol={symbol}&"
                         f"interval={interval}&"
-                        f"fast_period=12&slow_period=26&signal_period=9&" # Using Twelve Data's default periods
+                        f"fast_period=12&slow_period=26&signal_period=9&" # Using Twelve Data's common default periods
                         f"apikey={TWELVE_DATA_API_KEY}"
                     )
                 elif indicator_name_lower == 'bbands':
@@ -266,7 +266,7 @@ def get_market_data():
                                 return jsonify({"text": f"Could not parse Bollinger Bands for {readable_symbol}. Invalid format received from Twelve Data."}), 500
                             else:
                                 return jsonify({"text": f"Could not find all Bollinger Bands components for {readable_symbol} in Twelve Data API response."})
-                    elif indicator_name_upper == 'STOCH': # NEW: Stochastic Oscillator from Twelve Data
+                    elif indicator_name_upper == 'STOCH': # Stochastic Oscillator from Twelve Data
                         stoch_k_td = latest_indicator_data_td.get('stoch_k')
                         stoch_d_td = latest_indicator_data_td.get('stoch_d')
 
@@ -282,7 +282,7 @@ def get_market_data():
                                 print(f"Twelve Data returned invalid STOCH format: {latest_indicator_data_td}")
                                 return jsonify({"text": f"Could not parse Stochastic Oscillator for {readable_symbol}. Invalid format received from Twelve Data."}), 500
                             else:
-                                return jsonify({"text": f"Could not find Stochastic Oscillator components for {readable_symbol} in Twelve Data API response."})
+                                return jsonify({"text": f"No Stochastic Oscillator data found for {readable_symbol} in Twelve Data API response."})
                         else:
                             return jsonify({"text": f"No Stochastic Oscillator data found for {readable_symbol} in Twelve Data API response."}), 500
                     else:
