@@ -20,15 +20,13 @@ last_twelve_data_call = 0
 last_news_api_call = 0
 
 # Minimum time (in seconds) between calls to each API
-# Adjust these values based on the free tier limits of Twelve Data and NewsAPI.org
-# A conservative limit for free tiers might be 5-10 seconds to avoid hitting limits too quickly.
 TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between Twelve Data calls)
-NEWS_API_MIN_INTERVAL = 1   # seconds (e.g., 10 seconds between NewsAPI calls)
+NEWS_API_MIN_INTERVAL = 1    # seconds (e.g., 10 seconds between NewsAPI calls)
 
 # Simple in-memory cache for recent responses
 # { (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language): {'response_json': {}, 'timestamp': float} }
 api_response_cache = {}
-CACHE_DURATION = 300 # NEW: Cache responses for 300 seconds (5 minutes) to reduce API calls
+CACHE_DURATION = 300 # Cache responses for 300 seconds (5 minutes)
 
 # Define the webhook endpoint
 @app.route('/market_data', methods=['GET']) # Endpoint for all data types
@@ -36,7 +34,6 @@ def get_market_data():
     """
     This endpoint fetches live price, historical data, technical analysis indicators,
     or market news using Twelve Data and NewsAPI.org.
-    It includes rate limiting and caching to manage API call frequency.
 
     Required parameters:
     - 'symbol': Ticker symbol (e.g., 'BTC/USD', 'AAPL') for price/TA, or
@@ -47,8 +44,8 @@ def get_market_data():
 
     For 'historical' or 'indicator' data:
     - 'interval': Time interval (e.g., '1min', '1day'). Defaults to '1day'.
-    - 'outputsize': Number of data points. Defaults to '1' for historical, adjusted for indicator.
-    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD').
+    - 'outputsize': Number of data points. Defaults to '50' for historical, adjusted for indicator.
+    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS', 'PVT', 'STOCHRSI').
                    Requires 'data_type' to be 'indicator'.
     - 'indicator_period': Period for the indicator (e.g., '14', '20', '50').
                           Required if 'indicator' is specified.
@@ -64,7 +61,7 @@ def get_market_data():
     global last_twelve_data_call, last_news_api_call # Declare global to modify timestamps
 
     # Get parameters from the request
-    symbol = request.args.get('symbol') # Used for price/TA
+    symbol = request.args.get('symbol')
     data_type = request.args.get('data_type', 'live').lower()
 
     interval = request.args.get('interval')
@@ -78,7 +75,7 @@ def get_market_data():
     sort_by = request.args.get('sort_by', 'publishedAt')
     news_language = request.args.get('news_language', 'en')
 
-    # Create a cache key for the current request
+    # Create a cache key for the current request (include new parameter)
     cache_key = (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language)
     current_time = time.time()
 
@@ -103,7 +100,6 @@ def get_market_data():
             if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
                 time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
                 print(f"Rate limit hit for Twelve Data. Waiting {time_to_wait:.2f} seconds.")
-                # NEW: More conversational rate limit message
                 return jsonify({"text": f"I'm currently experiencing high demand for live market data. Please give me about {int(time_to_wait) + 1} seconds and try again."}), 429
             
             if not symbol:
@@ -126,7 +122,7 @@ def get_market_data():
                     readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() 
                     response_data = {"text": f"The current price of {readable_symbol} is {formatted_price}."}
                 except ValueError:
-                    print(f"Twelve Data returned invalid price format for {symbol}: {current_price}")
+                    print(f"Twelve Data returned invalid price format for {symbol}: {current_time}")
                     return jsonify({"text": f"Could not parse live price for {symbol}. Invalid format received."}), 500
             else:
                 print(f"Twelve Data did not return a 'close' price for {symbol}. Response: {data}")
@@ -134,12 +130,14 @@ def get_market_data():
             globals()['last_twelve_data_call'] = time.time() # Update last call timestamp
 
         elif data_type == 'historical' or data_type == 'indicator':
+            # Define readable_symbol early to ensure it's always available for error messages
+            readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() if symbol else "N/A"
+
             # --- Rate Limiting for Twelve Data ---
             if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
                 time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
                 print(f"Rate limit hit for Twelve Data. Waiting {time_to_wait:.2f} seconds.")
-                # NEW: More conversational rate limit message
-                return jsonify({"text": f"I'm currently experiencing high demand for market data. Please give me about {int(time_to_wait) + 1} seconds and try again."}), 429
+                return jsonify({"text": f"Please wait a moment. I'm fetching new data, but there's a slight delay due to API limits. Try again in {int(time_to_wait) + 1} seconds."}), 429
 
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for historical data. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
@@ -166,6 +164,12 @@ def get_market_data():
                         return jsonify({"text": f"Error: The indicator period '{indicator_period}' must be a whole number (e.g., 14, 20, 50). Please avoid decimals or text."}), 400
                 # --- END: Enhanced indicator_period parsing ---
 
+                # Handle indicator source: local (pandas/ta) vs. twelvedata API
+                # In this version, we are reverting to local calculation for all indicators
+                # that were previously implemented with pandas/ta.
+                # The 'indicator_source' parameter will still exist but will effectively be ignored
+                # as all indicators will be calculated locally.
+
                 required_outputsize = max(indicator_period * 2, 50) 
                 if outputsize:
                     try:
@@ -175,52 +179,47 @@ def get_market_data():
                     outputsize = max(outputsize, required_outputsize)
                 else:
                     outputsize = required_outputsize
-                print(f"Adjusted 'outputsize' to '{outputsize}' for indicator calculation.")
-            else: # data_type == 'historical'
-                if not outputsize:
-                    outputsize = '50' # Default to 50 data points for candlestick analysis
-                    print(f"Defaulting 'outputsize' to '{outputsize}' for historical data.")
-                try:
-                    outputsize = int(float(outputsize)) 
-                except (ValueError, TypeError):
-                    return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
+                print(f"Adjusted 'outputsize' to '{outputsize}' for local indicator calculation.")
 
+                api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
+                print(f"Fetching data for {symbol} (interval: {interval}, outputsize: {outputsize}) from Twelve Data API for local calculation...")
+                response = requests.get(api_url)
+                response.raise_for_status()
+                data = response.json()
 
-            api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
-            print(f"Fetching data for {symbol} (interval: {interval}, outputsize: {outputsize}) from Twelve Data API...")
-            response = requests.get(api_url)
-            response.raise_for_status()
-            data = response.json()
+                if data.get('status') == 'error':
+                    error_message = data.get('message', 'Unknown error from Twelve Data.')
+                    print(f"Twelve Data API error for symbol {symbol} historical data: {error_message}")
+                    return jsonify({"text": f"Could not retrieve data for {symbol}. Error: {error_message}"}), 500
+                
+                historical_values = data.get('values')
+                if not historical_values:
+                    print(f"Twelve Data returned no values for {symbol}. Response: {data}")
+                    return jsonify({"text": f"No data found for {symbol} with the specified interval and output size for local indicator calculation. The symbol or parameters might be incorrect."}), 500
 
-            if data.get('status') == 'error':
-                error_message = data.get('message', 'Unknown error from Twelve Data.')
-                print(f"Twelve Data API error for symbol {symbol} historical data: {error_message}")
-                return jsonify({"text": f"Could not retrieve data for {symbol}. Error: {error_message}"}), 500
-            
-            historical_values = data.get('values')
-            if not historical_values:
-                print(f"Twelve Data returned no values for {symbol}. Response: {data}")
-                return jsonify({"text": f"No data found for {symbol} with the specified interval and output size. The symbol or parameters might be incorrect."}), 500
+                df = pd.DataFrame(historical_values)
+                # Convert necessary columns to numeric, handling potential missing data
+                for col in ['close', 'high', 'low', 'open', 'volume']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce') # 'coerce' turns invalid parsing into NaN
+                    else:
+                        df[col] = pd.NA # Add missing column as NA
 
-            # Convert to pandas DataFrame for TA calculations
-            df = pd.DataFrame(historical_values)
-            df['close'] = pd.to_numeric(df['close'])
-            df = df.iloc[::-1].reset_index(drop=True)
+                # Drop rows with NaN in critical columns for TA calculation
+                df.dropna(subset=['close', 'high', 'low', 'open'], inplace=True)
+                if df.empty:
+                    return jsonify({"text": f"Error: Insufficient valid OHLCV data for {readable_symbol} after cleaning. Cannot calculate indicators."}), 500
+                
+                # Check if 'volume' column has enough non-NaN values for volume-based indicators
+                if 'volume' in df.columns and df['volume'].isnull().all():
+                    if indicator.upper() in ['PVT']: # Check indicator name here
+                        return jsonify({"text": f"Error: Volume data is missing or entirely invalid for {readable_symbol}. Cannot calculate Price Volume Trend."}), 400
+                    print(f"Warning: Volume data missing or invalid for {readable_symbol}, but not critical for {indicator.upper()}.")
+                
+                df = df.iloc[::-1].reset_index(drop=True)
 
-            readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper()
-
-            if data_type == 'historical':
-                response_data = {
-                    "text": (
-                        f"I have retrieved {len(historical_values)} data points for {readable_symbol} "
-                        f"at {interval} intervals, covering from {df['datetime'].iloc[0]} to {df['datetime'].iloc[-1]}. "
-                        f"This data includes Open, High, Low, and Close prices, which can be used for candlestick analysis by the agent."
-                    )
-                }
-            
-            elif data_type == 'indicator':
                 indicator_value = None
-                indicator_name = indicator.upper()
+                indicator_name = indicator.upper() # Assign indicator_name here
 
                 if indicator_name == 'SMA':
                     if len(df) < indicator_period:
@@ -244,10 +243,7 @@ def get_market_data():
                     if len(df) < 34:
                         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
                     
-                    # FIX: Corrected parameter names for ta.trend.macd based on GitHub issue
-                    # The 'ta' library's macd function uses 'window_fast', 'window_slow', and 'window_signal'
-                    # The GitHub issue states: macd() does NOT take window_sign. It's for macd_signal and macd_diff.
-                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26) # Removed window_signal/window_sign
+                    macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26)
                     macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9)
                     macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9)
                     
@@ -257,8 +253,63 @@ def get_market_data():
                         'Histogram': macd_histogram.iloc[-1]
                     }
                     indicator_description = "Moving Average Convergence D-I-vergence"
+                elif indicator_name == 'BBANDS': # Bollinger Bands
+                    window_dev = 2 # Standard deviation for Bollinger Bands
+                    if len(df) < indicator_period:
+                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. Need at least {indicator_period} data points."}), 400
+                    
+                    bb_hband = ta.volatility.bollinger_hband(df['close'], window=indicator_period, window_dev=window_dev)
+                    bb_mband = ta.volatility.bollinger_mband(df['close'], window=indicator_period, window_dev=window_dev)
+                    bb_lband = ta.volatility.bollinger_lband(df['close'], window=indicator_period, window_dev=window_dev)
+
+                    upper_band = bb_hband.iloc[-1]
+                    middle_band = bb_mband.iloc[-1]
+                    lower_band = bb_lband.iloc[-1]
+
+                    if pd.isna(upper_band) or pd.isna(middle_band) or pd.isna(lower_band):
+                        return jsonify({"text": f"Could not calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. The data series might be too short or contain invalid values for the period."}), 500
+
+                    indicator_value = {
+                        'Upper_Band': upper_band,
+                        'Middle_Band': middle_band,
+                        'Lower_Band': lower_band
+                    }
+                    indicator_description = f"{indicator_period}-period Bollinger Bands"
+                elif indicator_name == 'PVT': # Price Volume Trend
+                    if len(df) < 2:
+                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate Price Volume Trend for {readable_symbol}. Need at least 2 data points."}), 400
+                    if 'volume' not in df.columns or df['volume'].isnull().all(): # Re-check volume after cleaning
+                         return jsonify({"text": f"Error: Volume data is missing or invalid for {readable_symbol}. Cannot calculate Price Volume Trend."}), 400
+                    
+                    df['PVT'] = ta.volume.pvt(df['close'], df['volume'])
+                    indicator_value = df['PVT'].iloc[-1]
+                    indicator_description = "Price Volume Trend"
+                elif indicator_name == 'STOCHRSI': # Stochastic RSI
+                    window_rsi = indicator_period
+                    window_stoch = 14
+                    window_k = 3
+                    window_d = 3
+
+                    if len(df) < max(window_rsi, window_stoch): 
+                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate Stochastic RSI for {readable_symbol}. Need at least {max(window_rsi, window_stoch)} data points."}), 400
+                    
+                    df['STOCHRSI_K'] = ta.momentum.stochrsi_k(df['close'], window=window_rsi, smooth1=window_stoch, smooth2=window_k)
+                    df['STOCHRSI_D'] = ta.momentum.stochrsi_d(df['close'], window=window_rsi, smooth1=window_stoch, smooth2=window_d)
+                    
+                    stochrsi_k = df['STOCHRSI_K'].iloc[-1]
+                    stochrsi_d = df['STOCHRSI_D'].iloc[-1]
+
+                    if pd.isna(stochrsi_k) or pd.isna(stochrsi_d):
+                        return jsonify({"text": f"Could not calculate Stochastic RSI for {readable_symbol}. Data might be insufficient or contain invalid values for the period."}), 500
+
+                    indicator_value = {
+                        'StochRSI_K': stochrsi_k,
+                        'StochRSI_D': stochrsi_d
+                    }
+                    indicator_description = f"{indicator_period}-period Stochastic RSI"
+
                 else:
-                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported. Supported indicators: SMA, EMA, RSI, MACD."}), 400
+                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported for local calculation. Supported: SMA, EMA, RSI, MACD, BBANDS, PVT, STOCHRSI."}), 400
 
                 if indicator_value is not None:
                     if isinstance(indicator_value, dict):
@@ -268,16 +319,52 @@ def get_market_data():
                         response_data = {"text": response_text.strip()}
                     else:
                         response_data = {"text": f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."}
-                else:
-                    return jsonify({"text": f"Could not calculate {indicator_name} for {readable_symbol}. Data might be insufficient or invalid."}), 500
+                    else:
+                        return jsonify({"text": f"Could not calculate {indicator_name} for {readable_symbol}. Data might be insufficient or invalid for local calculation."}), 500
+
+            else: # data_type == 'historical'
+                if not outputsize:
+                    outputsize = '50' # Default to 50 data points for candlestick analysis
+                    print(f"Defaulting 'outputsize' to '{outputsize}' for historical data.")
+                try:
+                    outputsize = int(float(outputsize)) 
+                except (ValueError, TypeError):
+                    return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
+
+
+                api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
+                print(f"Fetching data for {symbol} (interval: {interval}, outputsize: {outputsize}) from Twelve Data API for local calculation...")
+                response = requests.get(api_url)
+                response.raise_for_status()
+                data = response.json()
+
+                if data.get('status') == 'error':
+                    error_message = data.get('message', 'Unknown error from Twelve Data.')
+                    print(f"Twelve Data API error for symbol {symbol} historical data: {error_message}")
+                    return jsonify({"text": f"Could not retrieve data for {symbol}. Error: {error_message}"}), 500
+                
+                historical_values = data.get('values')
+                if not historical_values:
+                    print(f"Twelve Data returned no values for {symbol}. Response: {data}")
+                    return jsonify({"text": f"No data found for {symbol} with the specified interval and output size for local indicator calculation. The symbol or parameters might be incorrect."}), 500
+
+                response_data = {
+                    "text": (
+                        f"I have retrieved {len(historical_values)} data points for {readable_symbol} "
+                        f"at {interval} intervals, covering from {historical_values[0]['datetime']} to {historical_values[-1]['datetime']}. "
+                        f"This data includes Open, High, Low, Close, and Volume prices."
+                    )
+                }
             globals()['last_twelve_data_call'] = time.time() # Update last call timestamp
 
         elif data_type == 'news':
-            # --- Rate Limiting for NewsAPI ---
-            if (time.time() - last_news_api_call) < NEWS_API_MIN_INTERVAL:
+            # Define readable_symbol here as well for consistency in error messages
+            readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() if symbol else "N/A"
+
+            if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
                 time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
                 print(f"Rate limit hit for NewsAPI. Waiting {time_to_wait:.2f} seconds.")
-                return jsonify({"text": f"Please wait a moment. I'm fetching new news, but there's a slight delay due to API limits. Try again in {int(time_to_wait) + 1} seconds."}), 429 # 429 Too Many Requests
+                return jsonify({"text": f"Please wait a moment. I'm fetching new news, but there's a slight delay due to API limits. Try again in {int(time_to_wait) + 1} seconds."}), 429
 
             if not news_query:
                 return jsonify({"text": "Error: Missing 'news_query' parameter for news. Please specify keywords for the news search."}), 400
@@ -295,7 +382,7 @@ def get_market_data():
                 f"apiKey={NEWS_API_KEY}"
             )
             print(f"Fetching news for '{news_query}' from NewsAPI.org (from: {from_date}, sort: {sort_by})...")
-            response = requests.get(news_api_url)
+            response = requests.get(api_url)
             response.raise_for_status()
             news_data = response.json()
 
