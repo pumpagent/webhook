@@ -28,7 +28,7 @@ NEWS_API_MIN_INTERVAL = 1   # seconds (e.g., 10 seconds between NewsAPI calls)
 # Simple in-memory cache for recent responses
 # { (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language): {'response_json': {}, 'timestamp': float} }
 api_response_cache = {}
-CACHE_DURATION = 10 # NEW: Cache responses for 10 seconds (10 seconds) to reduce API calls
+CACHE_DURATION = 10 # NEW: Cache responses for 10 seconds (instead of 300 seconds)
 
 # Define the webhook endpoint
 @app.route('/market_data', methods=['GET']) # Endpoint for all data types
@@ -149,6 +149,9 @@ def get_market_data():
                 interval = '1day'
                 print(f"Defaulting 'interval' to '{interval}' for historical/indicator data.")
             
+            # Initialize min_required_for_calculation
+            min_required_for_calculation = 0
+
             # For indicators, ensure enough data points are fetched
             if data_type == 'indicator':
                 if not indicator:
@@ -166,29 +169,38 @@ def get_market_data():
                         return jsonify({"text": f"Error: The indicator period '{indicator_period}' must be a whole number (e.g., 14, 20, 50). Please avoid decimals or text."}), 400
                 # --- END: Enhanced indicator_period parsing ---
 
-                # Adjust required_outputsize based on the indicator and period
+                # Determine minimum required data points for the specific indicator
                 if indicator.upper() == 'BBANDS':
-                    # Bollinger Bands need enough data for the SMA and standard deviation
-                    required_outputsize = max(indicator_period * 2, 50) # Ensure sufficient data for calculation
+                    min_required_for_calculation = indicator_period
+                elif indicator.upper() == 'RSI':
+                    min_required_for_calculation = indicator_period * 2
+                elif indicator.upper() == 'MACD':
+                    min_required_for_calculation = 34
                 elif indicator.upper() == 'STOCHRSI':
-                    # Stochastic RSI typically needs enough data for RSI (window) + smoothing periods (smooth1, smooth2)
-                    # Common default smoothing periods are 3 for %K and %D
-                    required_outputsize = max(indicator_period + 3 + 3, 50) # RSI window + 2 smoothing windows
-                else:
-                    required_outputsize = max(indicator_period * 2, 50) # General case for other indicators
-                
+                    min_required_for_calculation = indicator_period + 6 # RSI window + 2 smoothing windows (3+3)
+                else: # SMA, EMA, etc.
+                    min_required_for_calculation = indicator_period
+
+                # Set a robust requested_outputsize for Twelve Data API
+                # If user provides outputsize, use it, but ensure it's at least min_required_for_calculation.
+                # If user doesn't provide, default to a generous number (e.g., 200) or min_required + a buffer.
+                requested_outputsize_to_api = 0
                 if outputsize:
                     try:
-                        outputsize = int(float(outputsize)) 
+                        requested_outputsize_to_api = int(float(outputsize))
                     except (ValueError, TypeError):
                         return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
-                    outputsize = max(outputsize, required_outputsize)
+                    # Ensure user's outputsize is at least the minimum required for calculation
+                    requested_outputsize_to_api = max(requested_outputsize_to_api, min_required_for_calculation)
                 else:
-                    outputsize = required_outputsize
+                    # Default to a robust size if not specified by user
+                    requested_outputsize_to_api = max(min_required_for_calculation + 50, 200) # Request min_required + 50 buffer, or 200, whichever is larger
+
+                outputsize = requested_outputsize_to_api # Use this for the API call
                 print(f"Adjusted 'outputsize' to '{outputsize}' for indicator calculation.")
             else: # data_type == 'historical'
                 if not outputsize:
-                    outputsize = '50' # Default to 50 data points for candlestick analysis
+                    outputsize = '50' # Default to 50 data points for historical data
                     print(f"Defaulting 'outputsize' to '{outputsize}' for historical data.")
                 try:
                     outputsize = int(float(outputsize)) 
@@ -204,12 +216,14 @@ def get_market_data():
             if data.get('status') == 'error':
                 error_message = data.get('message', 'Unknown error from Twelve Data.')
                 print(f"Twelve Data API error for symbol {symbol} historical data: {error_message}")
-                return jsonify({"text": f"Could not retrieve data for {symbol}. Error: {error_message}"}), 500
+                return jsonify({"text": f"Could not retrieve data for {readable_symbol}. Error from data provider: {error_message}"}), 500
             
             historical_values = data.get('values')
             if not historical_values:
                 print(f"Twelve Data returned no values for {symbol}. Response: {data}")
-                return jsonify({"text": f"No data found for {symbol} with the specified interval and output size. The symbol or parameters might be incorrect."}), 500
+                # Use min_required_for_calculation for a more specific message if it was an indicator request
+                needed_for_calc_msg = f"{min_required_for_calculation} needed for {indicator.upper()}" if data_type == 'indicator' and min_required_for_calculation > 0 else "some data"
+                return jsonify({"text": f"No data found for {readable_symbol} with the specified interval ({interval}) and requested output size ({outputsize}). Twelve Data might not have sufficient historical data for this symbol or interval, or the API returned fewer data points than expected ({len(historical_values) if historical_values else 0} received, {needed_for_calc_msg}). Please try a different symbol, interval, or a smaller indicator period."}), 500
 
             # Convert to pandas DataFrame for TA calculations
             df = pd.DataFrame(historical_values)
@@ -231,28 +245,24 @@ def get_market_data():
                 indicator_value = None
                 indicator_name = indicator.upper()
 
+                # Check if enough data points are available after fetching
+                if len(df) < min_required_for_calculation:
+                    return jsonify({"text": f"Not enough data points ({len(df)}) retrieved from Twelve Data to calculate {indicator_period}-period {indicator_name} for {readable_symbol}. Need at least {min_required_for_calculation} data points. Try a larger 'outputsize' or a different 'interval'."}), 400
+
+
                 if indicator_name == 'SMA':
-                    if len(df) < indicator_period:
-                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period SMA for {readable_symbol}. Need at least {indicator_period} data points."}), 400
                     df['SMA'] = ta.trend.sma_indicator(df['close'], window=indicator_period)
                     indicator_value = df['SMA'].iloc[-1]
                     indicator_description = f"{indicator_period}-period Simple Moving Average"
                 elif indicator_name == 'EMA':
-                    if len(df) < indicator_period:
-                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period EMA for {readable_symbol}. Need at least {indicator_period} data points."}), 400
                     df['EMA'] = ta.trend.ema_indicator(df['close'], window=indicator_period)
                     indicator_value = df['EMA'].iloc[-1]
                     indicator_description = f"{indicator_period}-period Exponential Moving Average"
                 elif indicator_name == 'RSI':
-                    if len(df) < indicator_period * 2: 
-                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period RSI for {readable_symbol}. Need at least {indicator_period * 2} data points."}), 400
                     df['RSI'] = ta.momentum.rsi(df['close'], window=indicator_period)
                     indicator_value = df['RSI'].iloc[-1]
                     indicator_description = f"{indicator_period}-period Relative Strength Index"
                 elif indicator_name == 'MACD':
-                    if len(df) < 34:
-                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
-                    
                     # FIX: Corrected parameter names for ta.trend.macd based on GitHub issue
                     # The 'ta' library's macd function uses 'window_fast', 'window_slow', and 'window_signal'
                     # The GitHub issue states: macd() does NOT take window_sign. It's for macd_signal and macd_diff.
@@ -268,9 +278,6 @@ def get_market_data():
                     indicator_description = "Moving Average Convergence D-I-vergence"
                 elif indicator_name == 'BBANDS':
                     # Bollinger Bands calculation using direct pandas operations
-                    if len(df) < indicator_period:
-                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. Need at least {indicator_period} data points."}), 400
-                    
                     # Calculate Middle Band (SMA)
                     middle_band = df['close'].rolling(window=indicator_period).mean()
                     
@@ -293,9 +300,6 @@ def get_market_data():
                 elif indicator_name == 'STOCHRSI':
                     # Stochastic RSI calculation
                     # Default smoothing periods for %K and %D are 3
-                    if len(df) < indicator_period + 3 + 3: # Need enough data for RSI + smoothing
-                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Stochastic RSI for {readable_symbol}. Need at least {indicator_period + 6} data points."}), 400
-                    
                     stochrsi_k = ta.momentum.stochrsi(df['close'], window=indicator_period, smooth1=3, smooth2=3) * 100 # Scale to 0-100
                     stochrsi_d = ta.momentum.stochrsi_d(df['close'], window=indicator_period, smooth1=3, smooth2=3) * 100 # Scale to 0-100
 
