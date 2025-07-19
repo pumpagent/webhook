@@ -108,7 +108,7 @@ def get_market_data():
             
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for live price. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
-            api_url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_API_KEY}"
+            api_url = f"[https://api.twelvedata.com/quote?symbol=](https://api.twelvedata.com/quote?symbol=){symbol}&apikey={TWELVE_DATA_API_KEY}"
             print(f"Fetching live price for {symbol} from Twelve Data API...")
             response = requests.get(api_url)
             response.raise_for_status()
@@ -192,7 +192,7 @@ def get_market_data():
                     return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
 
 
-            api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
+            api_url = f"[https://api.twelvedata.com/time_series?symbol=](https://api.twelvedata.com/time_series?symbol=){symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
             print(f"Fetching data for {symbol} (interval: {interval}, outputsize: {outputsize}) from Twelve Data API...")
             response = requests.get(api_url)
             response.raise_for_status()
@@ -273,6 +273,7 @@ def get_market_data():
                     bb = ta.volatility.BollingerBands(close=df['close'], window=indicator_period, window_dev=2)
 
                     # Access the bands by calling the methods to get the Series, then use .iloc[-1]
+                    # The screenshot from the user shows the methods are called with ()
                     indicator_value = {
                         'Upper_Band': bb.bollinger_hband().iloc[-1],
                         'Middle_Band': bb.bollinger_mband().iloc[-1],
@@ -309,7 +310,7 @@ def get_market_data():
                 print(f"Defaulting 'from_date' to '{from_date}' for news search.")
 
             news_api_url = (
-                f"https://newsapi.org/v2/everything?"
+                f"[https://newsapi.org/v2/everything](https://newsapi.org/v2/everything)?"
                 f"q={news_query}&"
                 f"from={from_date}&"
                 f"sortBy={sort_by}&"
