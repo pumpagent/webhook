@@ -265,20 +265,27 @@ def get_market_data():
                     }
                     indicator_description = "Moving Average Convergence D-I-vergence"
                 elif indicator_name == 'BBANDS':
-                    # Bollinger Bands calculation using the BollingerBands class
-                    # Default window_dev (standard deviation multiplier) is 2.0
-                    if len(df) < indicator_period: # Need at least 'indicator_period' for the SMA
+                    # Bollinger Bands calculation using direct pandas operations
+                    if len(df) < indicator_period:
                         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. Need at least {indicator_period} data points."}), 400
                     
-                    # Instantiate BollingerBands class
-                    bb = ta.volatility.BollingerBands(close=df['close'], window=indicator_period, window_dev=2)
+                    # Calculate Middle Band (SMA)
+                    middle_band = df['close'].rolling(window=indicator_period).mean()
+                    
+                    # Calculate Standard Deviation
+                    std_dev = df['close'].rolling(window=indicator_period).std()
+                    
+                    # Default window_dev (standard deviation multiplier) is 2.0
+                    window_dev = 2.0 
+                    
+                    # Calculate Upper and Lower Bands
+                    upper_band = middle_band + (std_dev * window_dev)
+                    lower_band = middle_band - (std_dev * window_dev)
 
-                    # Access the bands by calling the methods to get the Series, then use .iloc[-1]
-                    # The screenshot from the user shows the methods are called with ()
                     indicator_value = {
-                        'Upper_Band': bb.bollinger_hband().iloc[-1],
-                        'Middle_Band': bb.bollinger_mband().iloc[-1],
-                        'Lower_Band': bb.bollinger_lband().iloc[-1]
+                        'Upper_Band': upper_band.iloc[-1],
+                        'Middle_Band': middle_band.iloc[-1],
+                        'Lower_Band': lower_band.iloc[-1]
                     }
                     indicator_description = f"{indicator_period}-period Bollinger Bands"
                 else:
