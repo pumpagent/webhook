@@ -108,7 +108,8 @@ def get_market_data():
             
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for live price. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
-            api_url = f"[https://api.twelvedata.com/quote?symbol=](https://api.twelvedata.com/quote?symbol=){symbol}&apikey={TWELVE_DATA_API_KEY}"
+            # Corrected URL: Removed Markdown link formatting
+            api_url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_API_KEY}"
             print(f"Fetching live price for {symbol} from Twelve Data API...")
             response = requests.get(api_url)
             response.raise_for_status()
@@ -191,8 +192,8 @@ def get_market_data():
                 except (ValueError, TypeError):
                     return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
 
-
-            api_url = f"[https://api.twelvedata.com/time_series?symbol=](https://api.twelvedata.com/time_series?symbol=){symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
+            # Corrected URL: Removed Markdown link formatting
+            api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
             print(f"Fetching data for {symbol} (interval: {interval}, outputsize: {outputsize}) from Twelve Data API...")
             response = requests.get(api_url)
             response.raise_for_status()
@@ -309,8 +310,9 @@ def get_market_data():
                 from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
                 print(f"Defaulting 'from_date' to '{from_date}' for news search.")
 
+            # Corrected URL: Removed Markdown link formatting
             news_api_url = (
-                f"[https://newsapi.org/v2/everything](https://newsapi.org/v2/everything)?"
+                f"https://newsapi.org/v2/everything?"
                 f"q={news_query}&"
                 f"from={from_date}&"
                 f"sortBy={sort_by}&"
