@@ -12,7 +12,7 @@ app = Flask(__name__) # Corrected: Use __name__ for Flask app name
 
 # --- API Configurations ---
 TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY')
-NEWS_API_KEY = os.environ.get('NEWS_API_KEY') # For NewsAPI.org
+NEWS_API_KEY = os.environ.get('NEWS_API_KEY') # For NewsAPI.org (now for Newsdata.io)
 
 # --- Rate Limiting & Caching Configuration ---
 # Store last successful API call timestamp for each type of external API
@@ -35,7 +35,7 @@ CACHE_DURATION = 300 # NEW: Cache responses for 300 seconds (5 minutes) to reduc
 def get_market_data():
     """
     This endpoint fetches live price, historical data, technical analysis indicators,
-    or market news using Twelve Data and NewsAPI.org.
+    or market news using Twelve Data and Newsdata.io.
     It includes rate limiting and caching to manage API call frequency.
 
     Required parameters:
@@ -57,6 +57,7 @@ def get_market_data():
     - 'news_query': Keywords for news search.
     - 'from_date': Start date for news (YYYY-MM-DD). Defaults to 7 days ago.
     - 'sort_by': How to sort news ('relevancy', 'popularity', 'publishedAt'). Defaults to 'publishedAt'.
+                 For Newsdata.io, this maps to 'relevancy' or 'pubDate'.
     - 'news_language': Language of news (e.g., 'en'). Defaults to 'en'.
 
     Returns: Formatted string within a JSON object for Eleven Labs.
@@ -75,7 +76,7 @@ def get_market_data():
 
     news_query = request.args.get('news_query')
     from_date = request.args.get('from_date')
-    sort_by = request.args.get('sort_by', 'publishedAt')
+    sort_by = request.args.get('sort_by', 'publishedAt') # Default for NewsAPI.org, will map for Newsdata.io
     news_language = request.args.get('news_language', 'en')
 
     # Create a cache key for the current request
@@ -108,7 +109,6 @@ def get_market_data():
             
             if not symbol:
                 return jsonify({"text": "Error: Missing 'symbol' parameter for live price. Please specify a symbol (e.g., BTC/USD, AAPL)."}), 400
-            # Corrected URL: Removed Markdown link formatting
             api_url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_API_KEY}"
             print(f"Fetching live price for {symbol} from Twelve Data API...")
             response = requests.get(api_url)
@@ -192,7 +192,6 @@ def get_market_data():
                 except (ValueError, TypeError):
                     return jsonify({"text": "Error: 'outputsize' parameter must be a whole number (e.g., 7, not 7.0)."}), 400
 
-            # Corrected URL: Removed Markdown link formatting
             api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
             print(f"Fetching data for {symbol} (interval: {interval}, outputsize: {outputsize}) from Twelve Data API...")
             response = requests.get(api_url)
@@ -304,10 +303,10 @@ def get_market_data():
             globals()['last_twelve_data_call'] = time.time() # Update last call timestamp
 
         elif data_type == 'news':
-            # --- Rate Limiting for NewsAPI ---
+            # --- Rate Limiting for Newsdata.io ---
             if (time.time() - last_news_api_call) < NEWS_API_MIN_INTERVAL:
                 time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
-                print(f"Rate limit hit for NewsAPI. Waiting {time_to_wait:.2f} seconds.")
+                print(f"Rate limit hit for Newsdata.io. Waiting {time_to_wait:.2f} seconds.")
                 return jsonify({"text": f"Please wait a moment. I'm fetching new news, but there's a slight delay due to API limits. Try again in {int(time_to_wait) + 1} seconds."}), 429 # 429 Too Many Requests
 
             if not news_query:
@@ -317,31 +316,40 @@ def get_market_data():
                 from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
                 print(f"Defaulting 'from_date' to '{from_date}' for news search.")
 
-            # Corrected URL: Removed Markdown link formatting
+            # Map sort_by from NewsAPI.org style to Newsdata.io style
+            newsdata_sort_by = 'pubDate' # Default for Newsdata.io
+            if sort_by == 'relevancy':
+                newsdata_sort_by = 'relevancy'
+            elif sort_by == 'publishedAt': # NewsAPI.org's default, maps to pubDate for Newsdata.io
+                newsdata_sort_by = 'pubDate'
+
+            # Newsdata.io API URL and parameters
             news_api_url = (
-                f"https://newsapi.org/v2/everything?"
+                f"https://newsdata.io/api/1/news?"
                 f"q={news_query}&"
-                f"from={from_date}&"
-                f"sortBy={sort_by}&"
-                f"language={news_language}&"
-                f"apiKey={NEWS_API_KEY}"
+                f"language={news_language}&" # Newsdata.io uses 'language'
+                f"from_date={from_date}&"   # Newsdata.io uses 'from_date'
+                f"sort={newsdata_sort_by}&" # Newsdata.io uses 'sort'
+                f"apikey={NEWS_API_KEY}"    # Newsdata.io uses 'apikey'
             )
-            print(f"Fetching news for '{news_query}' from NewsAPI.org (from: {from_date}, sort: {sort_by})...")
+            print(f"Fetching news for '{news_query}' from Newsdata.io (from: {from_date}, sort: {newsdata_sort_by})...")
             response = requests.get(news_api_url)
             response.raise_for_status()
             news_data = response.json()
 
+            # Check Newsdata.io status and handle potential errors
             if news_data.get('status') == 'error':
-                error_message = news_data.get('message', 'Unknown error from NewsAPI.org.')
-                print(f"NewsAPI.org error: {error_message}")
+                error_message = news_data.get('message', 'Unknown error from Newsdata.io.')
+                print(f"Newsdata.io error: {error_message}")
                 return jsonify({"text": f"Could not retrieve news. Error: {error_message}"}), 500
             
-            articles = news_data.get('articles')
+            articles = news_data.get('results') # Newsdata.io uses 'results'
             if articles:
                 response_text = f"Here are some recent news headlines for {news_query}: "
                 for i, article in enumerate(articles[:3]): # Limit to top 3 articles
                     title = article.get('title', 'No title')
-                    source = article.get('source', {}).get('name', 'Unknown source')
+                    # Newsdata.io uses 'source_id' or 'creator' for source name
+                    source = article.get('source_id', article.get('creator', 'Unknown source'))
                     response_text += f"Number {i+1}: '{title}' from {source}. "
                 response_data = {"text": response_text.strip()}
             else:
