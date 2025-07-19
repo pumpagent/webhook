@@ -296,8 +296,8 @@ def get_market_data():
                     if len(df) < indicator_period + 3 + 3: # Need enough data for RSI + smoothing
                         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Stochastic RSI for {readable_symbol}. Need at least {indicator_period + 6} data points."}), 400
                     
-                    stochrsi_k = ta.momentum.stochrsi(df['close'], window=indicator_period, smooth1=3, smooth2=3)
-                    stochrsi_d = ta.momentum.stochrsi_d(df['close'], window=indicator_period, smooth1=3, smooth2=3)
+                    stochrsi_k = ta.momentum.stochrsi(df['close'], window=indicator_period, smooth1=3, smooth2=3) * 100 # Scale to 0-100
+                    stochrsi_d = ta.momentum.stochrsi_d(df['close'], window=indicator_period, smooth1=3, smooth2=3) * 100 # Scale to 0-100
 
                     indicator_value = {
                         'StochRSI_K': stochrsi_k.iloc[-1],
