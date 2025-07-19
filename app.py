@@ -28,7 +28,7 @@ NEWS_API_MIN_INTERVAL = 1   # seconds (e.g., 10 seconds between NewsAPI calls)
 # Simple in-memory cache for recent responses
 # { (data_type, symbol, interval, indicator, indicator_period, news_query, from_date, sort_by, news_language): {'response_json': {}, 'timestamp': float} }
 api_response_cache = {}
-CACHE_DURATION = 300 # NEW: Cache responses for 300 seconds (5 minutes) to reduce API calls
+CACHE_DURATION = 10 # NEW: Cache responses for 10 seconds (10 seconds) to reduce API calls
 
 # Define the webhook endpoint
 @app.route('/market_data', methods=['GET']) # Endpoint for all data types
