@@ -8,7 +8,7 @@ import ta # Import the 'ta' library for technical analysis indicators
 from datetime import datetime, timedelta # Import for date handling
 
 # Initialize the Flask application
-app = Flask(__app_id__) # Use __app_id for Flask app name
+app = Flask(__name__) # Corrected: Use __name__ for Flask app name
 
 # --- API Configurations ---
 TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY')
