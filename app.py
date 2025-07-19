@@ -194,7 +194,8 @@ def get_market_data():
                     requested_outputsize_to_api = max(requested_outputsize_to_api, min_required_for_calculation)
                 else:
                     # Default to a robust size if not specified by user
-                    requested_outputsize_to_api = max(min_required_for_calculation + 50, 200) # Request min_required + 50 buffer, or 200, whichever is larger
+                    # Adjusted default to 100, or min_required + 20 buffer, whichever is larger
+                    requested_outputsize_to_api = max(min_required_for_calculation + 20, 100) 
 
                 outputsize = requested_outputsize_to_api # Use this for the API call
                 print(f"Adjusted 'outputsize' to '{outputsize}' for indicator calculation.")
@@ -299,7 +300,7 @@ def get_market_data():
                     indicator_description = f"{indicator_period}-period Bollinger Bands"
                 elif indicator_name == 'STOCHRSI':
                     # Stochastic RSI calculation
-                    # Reverted to smooth1=3 for %K and %D to align with previous behavior
+                    # Reverted smooth1=3 for %K and %D as per user's request
                     stochrsi_k = ta.momentum.stochrsi(df['close'], window=indicator_period, smooth1=3, smooth2=3) * 100 # Scale to 0-100
                     stochrsi_d = ta.momentum.stochrsi_d(df['close'], window=indicator_period, smooth1=3, smooth2=3) * 100 # Scale to 0-100
 
