@@ -48,10 +48,10 @@ def get_market_data():
     For 'historical' or 'indicator' data:
     - 'interval': Time interval (e.g., '1min', '1day'). Defaults to '1day'.
     - 'outputsize': Number of data points. Defaults to '1' for historical, adjusted for indicator.
-    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD').
-                   Requires 'data_type' to be 'indicator'.
+    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS').
+                    Requires 'data_type' to be 'indicator'.
     - 'indicator_period': Period for the indicator (e.g., '14', '20', '50').
-                          Required if 'indicator' is specified.
+                            Required if 'indicator' is specified.
 
     For 'news' data:
     - 'news_query': Keywords for news search.
@@ -166,7 +166,13 @@ def get_market_data():
                         return jsonify({"text": f"Error: The indicator period '{indicator_period}' must be a whole number (e.g., 14, 20, 50). Please avoid decimals or text."}), 400
                 # --- END: Enhanced indicator_period parsing ---
 
-                required_outputsize = max(indicator_period * 2, 50) 
+                # Adjust required_outputsize based on the indicator and period
+                if indicator.upper() == 'BBANDS':
+                    # Bollinger Bands need enough data for the SMA and standard deviation
+                    required_outputsize = max(indicator_period * 2, 50) # Ensure sufficient data for calculation
+                else:
+                    required_outputsize = max(indicator_period * 2, 50) # General case for other indicators
+                
                 if outputsize:
                     try:
                         outputsize = int(float(outputsize)) 
@@ -257,8 +263,24 @@ def get_market_data():
                         'Histogram': macd_histogram.iloc[-1]
                     }
                     indicator_description = "Moving Average Convergence D-I-vergence"
+                elif indicator_name == 'BBANDS':
+                    # Bollinger Bands calculation
+                    # Default window_dev (standard deviation multiplier) is 2.0
+                    if len(df) < indicator_period: # Need at least 'indicator_period' for the SMA
+                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Bollinger Bands for {readable_symbol}. Need at least {indicator_period} data points."}), 400
+                    
+                    df['BB_High'] = ta.volatility.bollinger_hband(df['close'], window=indicator_period, window_dev=2)
+                    df['BB_Low'] = ta.volatility.bollinger_lband(df['close'], window=indicator_period, window_dev=2)
+                    df['BB_Mid'] = ta.volatility.bollinger_mband(df['close'], window=indicator_period, window_dev=2)
+
+                    indicator_value = {
+                        'Upper_Band': df['BB_High'].iloc[-1],
+                        'Middle_Band': df['BB_Mid'].iloc[-1],
+                        'Lower_Band': df['BB_Low'].iloc[-1]
+                    }
+                    indicator_description = f"{indicator_period}-period Bollinger Bands"
                 else:
-                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported. Supported indicators: SMA, EMA, RSI, MACD."}), 400
+                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported. Supported indicators: SMA, EMA, RSI, MACD, BBANDS."}), 400
 
                 if indicator_value is not None:
                     if isinstance(indicator_value, dict):
