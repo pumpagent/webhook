@@ -272,11 +272,11 @@ def get_market_data():
                     # Instantiate BollingerBands class
                     bb = ta.volatility.BollingerBands(close=df['close'], window=indicator_period, window_dev=2)
 
-                    # Access the bands using the class properties (no parentheses)
+                    # Access the bands by calling the methods to get the Series, then use .iloc[-1]
                     indicator_value = {
-                        'Upper_Band': bb.bollinger_hband.iloc[-1],
-                        'Middle_Band': bb.bollinger_mband.iloc[-1],
-                        'Lower_Band': bb.bollinger_lband.iloc[-1]
+                        'Upper_Band': bb.bollinger_hband().iloc[-1],
+                        'Middle_Band': bb.bollinger_mband().iloc[-1],
+                        'Lower_Band': bb.bollinger_lband().iloc[-1]
                     }
                     indicator_description = f"{indicator_period}-period Bollinger Bands"
                 else:
