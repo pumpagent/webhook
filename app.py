@@ -299,10 +299,9 @@ def get_market_data():
                     indicator_description = f"{indicator_period}-period Bollinger Bands"
                 elif indicator_name == 'STOCHRSI':
                     # Stochastic RSI calculation
-                    # Set smooth1=1 for %K to represent the "raw" Stochastic RSI, which is common in charts.
-                    # smooth2=3 for %D as it's a 3-period SMA of %K.
-                    stochrsi_k = ta.momentum.stochrsi(df['close'], window=indicator_period, smooth1=1, smooth2=3) * 100 # Scale to 0-100
-                    stochrsi_d = ta.momentum.stochrsi_d(df['close'], window=indicator_period, smooth1=1, smooth2=3) * 100 # Scale to 0-100
+                    # Reverted to smooth1=3 for %K and %D to align with previous behavior
+                    stochrsi_k = ta.momentum.stochrsi(df['close'], window=indicator_period, smooth1=3, smooth2=3) * 100 # Scale to 0-100
+                    stochrsi_d = ta.momentum.stochrsi_d(df['close'], window=indicator_period, smooth1=3, smooth2=3) * 100 # Scale to 0-100
 
                     indicator_value = {
                         'StochRSI_K': stochrsi_k.iloc[-1],
