@@ -242,7 +242,7 @@ def get_market_data():
                         return jsonify({"text": f"Not enough data points ({len(df)}) to calculate MACD for {readable_symbol}. Need at least 34 data points."}), 400
                     
                     macd_line = ta.trend.macd(df['close'], window_fast=12, window_slow=26)
-                    macd_signal_line = ta.trend.macd.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9) # Corrected call
+                    macd_signal_line = ta.trend.macd_signal(df['close'], window_fast=12, window_slow=26, window_sign=9) # Corrected call
                     macd_histogram = ta.trend.macd_diff(df['close'], window_fast=12, window_slow=26, window_sign=9) # Corrected call
                     
                     indicator_value = {
