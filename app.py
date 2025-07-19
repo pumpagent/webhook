@@ -48,7 +48,7 @@ def get_market_data():
     For 'historical' or 'indicator' data:
     - 'interval': Time interval (e.g., '1min', '1day'). Defaults to '1day'.
     - 'outputsize': Number of data points. Defaults to '1' for historical, adjusted for indicator.
-    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS').
+    - 'indicator': Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS', 'STOCHRSI').
                     Requires 'data_type' to be 'indicator'.
     - 'indicator_period': Period for the indicator (e.g., '14', '20', '50').
                             Required if 'indicator' is specified.
@@ -170,6 +170,10 @@ def get_market_data():
                 if indicator.upper() == 'BBANDS':
                     # Bollinger Bands need enough data for the SMA and standard deviation
                     required_outputsize = max(indicator_period * 2, 50) # Ensure sufficient data for calculation
+                elif indicator.upper() == 'STOCHRSI':
+                    # Stochastic RSI typically needs enough data for RSI (window) + smoothing periods (smooth1, smooth2)
+                    # Common default smoothing periods are 3 for %K and %D
+                    required_outputsize = max(indicator_period + 3 + 3, 50) # RSI window + 2 smoothing windows
                 else:
                     required_outputsize = max(indicator_period * 2, 50) # General case for other indicators
                 
@@ -286,8 +290,22 @@ def get_market_data():
                         'Lower_Band': lower_band.iloc[-1]
                     }
                     indicator_description = f"{indicator_period}-period Bollinger Bands"
+                elif indicator_name == 'STOCHRSI':
+                    # Stochastic RSI calculation
+                    # Default smoothing periods for %K and %D are 3
+                    if len(df) < indicator_period + 3 + 3: # Need enough data for RSI + smoothing
+                        return jsonify({"text": f"Not enough data points ({len(df)}) to calculate {indicator_period}-period Stochastic RSI for {readable_symbol}. Need at least {indicator_period + 6} data points."}), 400
+                    
+                    stochrsi_k = ta.momentum.stochrsi(df['close'], window=indicator_period, smooth1=3, smooth2=3)
+                    stochrsi_d = ta.momentum.stochrsi_d(df['close'], window=indicator_period, smooth1=3, smooth2=3)
+
+                    indicator_value = {
+                        'StochRSI_K': stochrsi_k.iloc[-1],
+                        'StochRSI_D': stochrsi_d.iloc[-1]
+                    }
+                    indicator_description = f"{indicator_period}-period Stochastic Relative Strength Index"
                 else:
-                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported. Supported indicators: SMA, EMA, RSI, MACD, BBANDS."}), 400
+                    return jsonify({"text": f"Error: Indicator '{indicator}' not supported. Supported indicators: SMA, EMA, RSI, MACD, BBANDS, STOCHRSI."}), 400
 
                 if indicator_value is not None:
                     if isinstance(indicator_value, dict):
