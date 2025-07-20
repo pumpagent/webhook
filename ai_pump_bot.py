@@ -126,7 +126,7 @@ async def on_message(message):
             llm_data_first_turn = llm_response_first_turn.json()
         except requests.exceptions.RequestException as e:
             print(f"Error connecting to Gemini LLM (first turn): {e}")
-            response_text_for_discord = "I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later."
+            response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
             await message.channel.send(response_text_for_discord)
             return # Exit early if LLM connection fails
 
@@ -158,7 +158,7 @@ async def on_message(message):
                                 print(f"Tool execution output: {tool_output_text}")
                             except requests.exceptions.RequestException as e:
                                 print(f"Error connecting to Flask Webhook: {e}")
-                                response_text_for_discord = "I'm having trouble connecting to my data service webhook. Please ensure the webhook URL is correct and the service is running."
+                                response_text_for_discord = f"I'm having trouble connecting to my data service webhook. Please ensure the webhook URL is correct and the service is running. Error: {e}"
                                 await message.channel.send(response_text_for_discord)
                                 return # Exit early if webhook connection fails
                             
@@ -182,7 +182,7 @@ async def on_message(message):
                                 llm_data_second_turn = llm_response_second_turn.json()
                             except requests.exceptions.RequestException as e:
                                 print(f"Error connecting to Gemini LLM (second turn after tool): {e}")
-                                response_text_for_discord = "I received the data, but I'm having trouble processing it with my AI brain. Please try again later."
+                                response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
                                 await message.channel.send(response_text_for_discord)
                                 return # Exit early
 
@@ -271,7 +271,7 @@ async def on_message(message):
                             llm_data_final_turn = llm_response_final_turn.json()
                         except requests.exceptions.RequestException as e:
                             print(f"Error connecting to Gemini LLM (final turn after analysis data): {e}")
-                            response_text_for_discord = "I collected the analysis data, but I'm having trouble generating a full analysis with my AI brain. Please try again later."
+                            response_text_for_discord = f"I collected the analysis data, but I'm having trouble generating a full analysis with my AI brain. Please try again later. Error: {e}"
                             await message.channel.send(response_text_for_discord)
                             return # Exit early
 
@@ -300,10 +300,10 @@ async def on_message(message):
     except requests.exceptions.RequestException as e:
         # This catch-all is for unexpected request errors outside of specific try blocks
         print(f"General Request Error: {e}")
-        response_text_for_discord = "An unexpected connection error occurred. Please check network connectivity or API URLs."
+        response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
     except Exception as e:
         print(f"An unexpected error occurred in bot logic: {e}")
-        response_text_for_discord = "An unexpected error occurred while processing your request. My apologies."
+        response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
 
     # Send the final response back to the Discord channel
     await message.channel.send(response_text_for_discord)
