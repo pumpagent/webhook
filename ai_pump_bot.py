@@ -162,42 +162,50 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             indicator_value = None
             indicator_description = ""
             
+            # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
             if indicator_name_upper == 'RSI':
-                value = data.get('value')
-                if value is not None:
-                    indicator_value = float(value)
-                    indicator_description = f"{indicator_period_str}-period Relative Strength Index"
+                if data.get('values') and len(data['values']) > 0:
+                    value = data['values'][0].get('rsi') # Get latest RSI value
+                    if value is not None:
+                        indicator_value = float(value)
+                        indicator_description = f"{indicator_period_str}-period Relative Strength Index"
             elif indicator_name_upper == 'MACD':
-                macd = data.get('macd')
-                signal = data.get('signal')
-                histogram = data.get('histogram')
-                if all(v is not None for v in [macd, signal, histogram]):
-                    indicator_value = {
-                        'MACD_Line': float(macd),
-                        'Signal_Line': float(signal),
-                        'Histogram': float(histogram)
-                    }
-                    indicator_description = "Moving Average Convergence D-I-vergence"
+                if data.get('values') and len(data['values']) > 0:
+                    latest_values = data['values'][0]
+                    macd = latest_values.get('macd')
+                    signal = latest_values.get('signal')
+                    histogram = latest_values.get('histogram')
+                    if all(v is not None for v in [macd, signal, histogram]):
+                        indicator_value = {
+                            'MACD_Line': float(macd),
+                            'Signal_Line': float(signal),
+                            'Histogram': float(histogram)
+                        }
+                        indicator_description = "Moving Average Convergence D-I-vergence"
             elif indicator_name_upper == 'BBANDS':
-                upper = data.get('upper')
-                middle = data.get('middle')
-                lower = data.get('lower')
-                if all(v is not None for v in [upper, middle, lower]):
-                    indicator_value = {
-                        'Upper_Band': float(upper),
-                        'Middle_Band': float(middle),
-                        'Lower_Band': float(lower)
-                    }
-                    indicator_description = f"{indicator_period_str}-period Bollinger Bands"
+                if data.get('values') and len(data['values']) > 0:
+                    latest_values = data['values'][0]
+                    upper = latest_values.get('upper')
+                    middle = latest_values.get('middle')
+                    lower = latest_values.get('lower')
+                    if all(v is not None for v in [upper, middle, lower]):
+                        indicator_value = {
+                            'Upper_Band': float(upper),
+                            'Middle_Band': float(middle),
+                            'Lower_Band': float(lower)
+                        }
+                        indicator_description = f"{indicator_period_str}-period Bollinger Bands"
             elif indicator_name_upper == 'STOCHRSI':
-                stochrsi_k = data.get('stochrsi')
-                stochrsi_d = data.get('stochrsi_signal')
-                if all(v is not None for v in [stochrsi_k, stochrsi_d]):
-                    indicator_value = {
-                        'StochRSI_K': float(stochrsi_k),
-                        'StochRSI_D': float(stochrsi_d)
-                    }
-                    indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
+                if data.get('values') and len(data['values']) > 0:
+                    latest_values = data['values'][0]
+                    stochrsi_k = latest_values.get('stochrsi')
+                    stochrsi_d = latest_values.get('stochrsi_signal')
+                    if all(v is not None for v in [stochrsi_k, stochrsi_d]):
+                        indicator_value = {
+                            'StochRSI_K': float(stochrsi_k),
+                            'StochRSI_D': float(stochrsi_d)
+                        }
+                        indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
 
             if indicator_value is not None:
                 if isinstance(indicator_value, dict):
@@ -212,8 +220,6 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
 
         elif data_type == 'news':
             # --- Rate Limiting for NewsAPI.org ---
-            # This part is still using NewsAPI.org and its own rate limiting.
-            # If you switch News API, this section needs to be updated.
             NEWS_API_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between NewsAPI calls)
             last_news_api_call = 0 # This needs to be managed globally for NewsAPI.org
             if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
@@ -347,6 +353,7 @@ async def on_message(message):
 
         if llm_data_first_turn and llm_data_first_turn.get('candidates'):
             candidate_first_turn = llm_data_first_turn['candidates'][0]
+            # Ensure content and parts exist before accessing
             if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
                 parts_first_turn = candidate_first_turn['content']['parts']
 
@@ -401,41 +408,20 @@ async def on_message(message):
                             if final_candidate.get('content') and final_candidate['content'].get('parts'):
                                 response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
                             else:
-                                response_text_for_discord = "AI did not provide a conversational response after tool execution."
+                                # LLM responded but no text content (e.g., safety block, empty response)
+                                print(f"LLM second turn: No text content in response. Full response: {llm_data_second_turn}")
+                                block_reason = llm_data_second_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
+                                response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
                         else:
                             response_text_for_discord = "Could not get a valid second response from the AI."
                     else:
                         response_text_for_discord = "LLM requested an unknown function."
-                elif parts[0].get('text'):
-                    response_text_for_discord = parts[0]['text']
+                elif parts_first_turn[0].get('text'):
+                    response_text_for_discord = parts_first_turn[0]['text']
                 else:
-                    response_text_for_discord = "LLM response format not recognized."
+                    # LLM responded but no text content (e.g., safety block, empty response)
+                    print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
+                    block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
+                    response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
             else:
-                response_text_for_discord = "LLM did not provide content in its response."
-        else:
-            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-            if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
-                response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
-        
-        # Add LLM's response to history
-        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-
-
-    except requests.exceptions.RequestException as e:
-        print(f"General Request Error: {e}")
-        response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
-    except Exception as e:
-        print(f"An unexpected error occurred in bot logic: {e}")
-        response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
-
-    await message.channel.send(response_text_for_discord)
-
-if __name__ == '__main__':
-    if not DISCORD_BOT_TOKEN:
-        print("Error: DISCORD_BOT_TOKEN environment variable not set.")
-    elif not TWELVE_DATA_API_KEY:
-        print("Error: TWELVE_DATA_API_KEY environment variable not set.")
-    elif not GOOGLE_API_KEY:
-        print("Error: GOOGLE_API_KEY environment variable not set.")
-    else:
-        client.run(DISCORD_BOT_TOKEN)
+                response_text_for_discord = "LLM did not provide content
