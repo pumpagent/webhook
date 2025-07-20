@@ -314,18 +314,18 @@ async def on_message(message):
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL')." },
-                                "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch." },
-                                "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user." },
+                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." },
+                                "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch (live, historical, indicator, news). This is required." },
+                                "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
                                 "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
-                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"], "description": "Name of the technical indicator." },
+                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"], "description": "Name of the technical indicator. Required if data_type is 'indicator'." },
                                 "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD." },
                                 "news_query": { "type": "string", "description": "Keywords for news search." },
                                 "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
                                 "sort_by": { "type": "string", "enum": ["relevancy", "popularity", "publishedAt"], "description": "How to sort news." },
                                 "news_language": { "type": "string", "description": "Language of news." }
                             },
-                            "required": [] # LLM will infer required based on data_type
+                            "required": ["symbol", "data_type"] # Explicitly make these required
                         }
                     }
                 ]
@@ -370,8 +370,23 @@ async def on_message(message):
                         print(f"LLM requested tool call: get_market_data with args: {function_args}")
                         current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
 
+                        # --- Pre-populate missing args with defaults before calling helper ---
+                        # These are defaults for the LLM's functionCall, not _fetch_data_from_twelve_data's defaults
+                        if 'interval' not in function_args:
+                            function_args['interval'] = '1day'
+                        if 'indicator_period' not in function_args:
+                            # Default indicator_period based on indicator type if not provided by LLM
+                            if function_args.get('indicator', '').upper() == 'MACD':
+                                function_args['indicator_period'] = '0' # MACD uses fixed periods
+                            else:
+                                function_args['indicator_period'] = '14' # Common default for others (RSI, BBANDS, STOCHRSI)
+                        
+                        # Ensure all args are strings for _fetch_data_from_twelve_data
+                        for key, value in function_args.items():
+                            function_args[key] = str(value)
+
+
                         try:
-                            # Direct call to the local helper function
                             tool_output_data = await _fetch_data_from_twelve_data(**function_args)
                             tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
                             print(f"Tool execution output: {tool_output_text}")
@@ -434,7 +449,6 @@ async def on_message(message):
             if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
                 response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
         
-        # Add LLM's response to history
         conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
 
 
