@@ -242,11 +242,14 @@ async def on_message(message):
                         combined_analysis_context = "\n".join(collected_indicator_data)
                         
                         # --- NEW: Truncate combined_analysis_context if too long ---
-                        MAX_LLM_CONTEXT_LENGTH = 2000 # Characters - a conservative limit
+                        MAX_LLM_CONTEXT_LENGTH = 1000 # Characters - a conservative limit
                         if len(combined_analysis_context) > MAX_LLM_CONTEXT_LENGTH:
                             original_len = len(combined_analysis_context)
                             combined_analysis_context = combined_analysis_context[:MAX_LLM_CONTEXT_LENGTH] + "\n... (analysis data truncated due to length)"
                             print(f"Combined analysis context truncated from {original_len} to {len(combined_analysis_context)} characters.")
+
+                        # --- NEW: Log the context sent to LLM for debugging ---
+                        print(f"Context sent to LLM for final analysis:\n{combined_analysis_context}")
 
                         # Add the combined tool output to chat history for the LLM to see
                         # This simulates a single function call with comprehensive output
