@@ -424,4 +424,31 @@ async def on_message(message):
                     block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
                     response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
             else:
-                response_text_for_discord = "LLM did not provide content
+                response_text_for_discord = "LLM did not provide content in its response."
+        else:
+            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
+            if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
+                response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
+        
+        # Add LLM's response to history
+        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+
+
+    except requests.exceptions.RequestException as e:
+        print(f"General Request Error: {e}")
+        response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
+    except Exception as e:
+        print(f"An unexpected error occurred in bot logic: {e}")
+        response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
+
+    await message.channel.send(response_text_for_discord)
+
+if __name__ == '__main__':
+    if not DISCORD_BOT_TOKEN:
+        print("Error: DISCORD_BOT_TOKEN environment variable not set.")
+    elif not TWELVE_DATA_API_KEY:
+        print("Error: TWELVE_DATA_API_KEY environment variable not set.")
+    elif not GOOGLE_API_KEY:
+        print("Error: GOOGLE_API_KEY environment variable not set.")
+    else:
+        client.run(DISCORD_BOT_TOKEN)
