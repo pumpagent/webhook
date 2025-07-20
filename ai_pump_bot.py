@@ -22,7 +22,7 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between Twelve Data calls)
+TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
 NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
 api_response_cache = {}
@@ -79,7 +79,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     if cache_key in api_response_cache:
         cached_data = api_response_cache[cache_key]
         if (current_time - cached_data['timestamp']) < CACHE_DURATION:
-            print(f"Serving cached response for {data_type} request to Twelve Data/NewsAPI.")
+            print(f"Serving cached response for {data_type} request to data service.")
             return cached_data['response_json']
 
     # --- Rate Limiting ---
@@ -87,13 +87,13 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
         if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
             time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
             raise requests.exceptions.RequestException(
-                f"Rate limit hit for Twelve Data. Please wait {time_to_wait:.2f} seconds."
+                f"Rate limit hit for data service. Please wait {time_to_wait:.2f} seconds."
             )
     else: # data_type == 'news'
         if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
             time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
             raise requests.exceptions.RequestException(
-                f"Rate limit hit for NewsAPI.org. Please wait {int(time_to_wait) + 1} seconds."
+                f"Rate limit hit for News API. Please wait {int(time_to_wait) + 1} seconds."
             )
 
 
@@ -105,21 +105,21 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             if not symbol:
                 raise ValueError("Missing 'symbol' parameter for live price.")
             api_url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_API_KEY}"
-            print(f"Fetching live price for {symbol} from Twelve Data API...")
+            print(f"Fetching live price for {symbol} from data service...")
             response = requests.get(api_url)
             response.raise_for_status()
             data = response.json()
 
             if data.get('status') == 'error':
-                error_message = data.get('message', 'Unknown error from Twelve Data.')
-                raise requests.exceptions.RequestException(f"Twelve Data API error for symbol {symbol}: {error_message}")
+                error_message = data.get('message', 'Unknown error from data service.')
+                raise requests.exceptions.RequestException(f"Data service error for symbol {symbol}: {error_message}")
             
             current_price = data.get('close')
             if current_price is not None:
                 formatted_price = f"${float(current_price):,.2f}"
                 response_data = {"text": f"The current price of {readable_symbol} is {formatted_price}."}
             else:
-                raise ValueError(f"Twelve Data did not return a 'close' price for {symbol}. Response: {data}")
+                raise ValueError(f"Data service did not return a 'close' price for {symbol}. Response: {data}")
 
         elif data_type == 'historical':
             if not symbol:
@@ -129,14 +129,14 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             outputsize_str = outputsize if outputsize else '50'
             
             api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval_str}&outputsize={outputsize_str}&apikey={TWELVE_DATA_API_KEY}"
-            print(f"Fetching data for {symbol} (interval: {interval_str}, outputsize: {outputsize_str}) from Twelve Data API...")
+            print(f"Fetching data for {symbol} (interval: {interval_str}, outputsize: {outputsize_str}) from data service...")
             response = requests.get(api_url)
             response.raise_for_status()
             data = response.json()
 
             if data.get('status') == 'error':
-                error_message = data.get('message', 'Unknown error from Twelve Data.')
-                raise requests.exceptions.RequestException(f"Twelve Data API error for symbol {symbol} historical data: {error_message}")
+                error_message = data.get('message', 'Unknown error from data service.')
+                raise requests.exceptions.RequestException(f"Data service error for symbol {symbol} historical data: {error_message}")
             
             historical_values = data.get('values')
             if not historical_values:
@@ -196,14 +196,14 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 raise ValueError(f"Indicator '{indicator}' not supported by direct API.")
 
             api_url = f"{base_api_url}{indicator_endpoint}"
-            print(f"Fetching {indicator_name_upper} for {symbol} from Twelve Data API with params: {params}...")
+            print(f"Fetching {indicator_name_upper} for {symbol} from data service with params: {params}...")
             response = requests.get(api_url, params=params)
             response.raise_for_status()
             data = response.json()
 
             if data.get('status') == 'error':
-                error_message = data.get('message', 'Unknown error from Twelve Data.')
-                raise requests.exceptions.RequestException(f"Twelve Data API error for {indicator_name_upper} for {symbol}: {error_message}")
+                error_message = data.get('message', 'Unknown error from data service.')
+                raise requests.exceptions.RequestException(f"Data service error for {indicator_name_upper} for {symbol}: {error_message}")
             
             indicator_value = None
             indicator_description = ""
@@ -299,14 +299,14 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 else:
                     response_data = {"text": f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."}
             else:
-                raise ValueError(f"Twelve Data did not return valid indicator values for {indicator_name_upper} for {symbol}. Raw latest_values: {latest_values}")
+                raise ValueError(f"Data service did not return valid indicator values for {indicator_name_upper} for {symbol}. Raw latest_values: {latest_values}")
 
         elif data_type == 'news':
             # --- Rate Limiting for NewsAPI.org ---
             if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
                 time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
                 raise requests.exceptions.RequestException(
-                    f"Rate limit hit for NewsAPI.org. Please wait {int(time_to_wait) + 1} seconds."
+                    f"Rate limit hit for News API. Please wait {int(time_to_wait) + 1} seconds."
                 )
 
             if not news_query:
@@ -324,14 +324,14 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 f"language={news_language_str}&"
                 f"apiKey={NEWS_API_KEY}" # Use NEWS_API_KEY directly
             )
-            print(f"Fetching news for '{news_query}' from NewsAPI.org...")
+            print(f"Fetching news for '{news_query}' from News API...")
             response = requests.get(api_url)
             response.raise_for_status()
             news_data = response.json()
 
             if news_data.get('status') == 'error':
-                error_message = news_data.get('message', 'Unknown error from NewsAPI.org.')
-                raise requests.exceptions.RequestException(f"NewsAPI.org error: {error_message}")
+                error_message = news_data.get('message', 'Unknown error from News API.')
+                raise requests.exceptions.RequestException(f"News API error: {error_message}")
             
             articles = news_data.get('articles')
             if articles:
@@ -466,7 +466,7 @@ async def on_message(message):
                                 tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
                                 print(f"Tool execution output: {tool_output_text}")
                             except requests.exceptions.RequestException as e:
-                                print(f"Error fetching data from Twelve Data via local helper: {e}")
+                                print(f"Error fetching data from data service via local helper: {e}")
                                 tool_output_text = f"Error fetching data: {e}"
                             except ValueError as e:
                                 print(f"Invalid parameters for data fetch: {e}")
@@ -492,9 +492,8 @@ async def on_message(message):
                                 llm_response_second_turn.raise_for_status()
                                 llm_data_second_turn = llm_response_second_turn.json()
                             except requests.exceptions.RequestException as e:
-                                print(f"Error connecting to Gemini LLM (second turn after tool): {e}")
+                                print(f"Error connecting to AI brain (second turn after tool): {e}")
                                 response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
-                                # Ensure response is sent even on LLM connection error
                                 for chunk in split_message(response_text_for_discord):
                                     await message.channel.send(chunk)
                                 return
@@ -510,7 +509,7 @@ async def on_message(message):
                             else:
                                 response_text_for_discord = "Could not get a valid second response from the AI."
                         else:
-                            response_text_for_discord = "LLM requested an unknown function."
+                            response_text_for_discord = "AI requested an unknown function."
                     elif parts_first_turn[0].get('text'):
                         response_text_for_discord = parts_first_turn[0]['text']
                     else:
@@ -518,7 +517,7 @@ async def on_message(message):
                         block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
                         response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
                 else:
-                    response_text_for_discord = "LLM did not provide content in its response."
+                    response_text_for_discord = "AI did not provide content in its response."
             else:
                 response_text_for_discord = "Could not get a valid response from the AI. Please try again."
                 if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
