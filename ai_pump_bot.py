@@ -192,15 +192,21 @@ def get_market_data():
                 return jsonify({"text": "Error: Missing 'symbol' parameter for indicator. Please specify a symbol."}), 400
             if not indicator:
                 return jsonify({"text": "Error: 'indicator' parameter is required when 'data_type' is 'indicator'."}), 400
-            if not indicator_period:
-                return jsonify({"text": "Error: 'indicator_period' is required for technical indicators."}), 400
             
+            # Ensure indicator_period is provided and is a string for Twelve Data API
+            if indicator_period is None:
+                # Default to '14' if not provided for indicator calls
+                indicator_period_str = '14'
+                print(f"Defaulting 'indicator_period' to '{indicator_period_str}' for {indicator}.")
+            else:
+                indicator_period_str = str(indicator_period) # Ensure it's a string
+
             indicator_name_upper = indicator.upper()
             base_api_url = "https://api.twelvedata.com/"
             indicator_endpoint = ""
             params = {
                 'symbol': symbol,
-                'interval': interval if interval else '1day',
+                'interval': interval if interval else '1day', # Default to 1day if not provided
                 'apikey': TWELVE_DATA_API_KEY
             }
             
@@ -209,7 +215,7 @@ def get_market_data():
             # Map indicator and period to Twelve Data API endpoints and parameters
             if indicator_name_upper == 'RSI':
                 indicator_endpoint = "rsi"
-                params['time_period'] = str(indicator_period) # Ensure time_period is string
+                params['time_period'] = indicator_period_str
             elif indicator_name_upper == 'MACD':
                 indicator_endpoint = "macd"
                 # Twelve Data MACD uses fast_period, slow_period, signal_period
@@ -219,17 +225,17 @@ def get_market_data():
                 params['signal_period'] = 9
             elif indicator_name_upper == 'BBANDS':
                 indicator_endpoint = "bbands"
-                params['time_period'] = str(indicator_period) # Ensure time_period is string
+                params['time_period'] = indicator_period_str
                 params['sd'] = 2 # Standard deviation, common default
             elif indicator_name_upper == 'STOCHRSI':
                 indicator_endpoint = "stochrsi"
-                params['time_period'] = str(indicator_period) # Ensure time_period is string
+                params['time_period'] = indicator_period_str
                 # Twelve Data STOCHRSI uses fast_k_period, fast_d_period, rsi_time_period, stoch_time_period
                 # Defaulting to common values
                 params['fast_k_period'] = 3
                 params['fast_d_period'] = 3
-                params['rsi_time_period'] = str(indicator_period) # Use indicator_period for RSI base
-                params['stoch_time_period'] = str(indicator_period) # Use indicator_period for Stoch base
+                params['rsi_time_period'] = indicator_period_str # Use indicator_period for RSI base
+                params['stoch_time_period'] = indicator_period_str # Use indicator_period for Stoch base
             else:
                 return jsonify({"text": f"Error: Indicator '{indicator}' not supported by direct API. Supported: RSI, MACD, BBANDS, STOCHRSI."}), 400
 
@@ -252,7 +258,7 @@ def get_market_data():
                 value = data.get('value')
                 if value is not None:
                     indicator_value = float(value)
-                    indicator_description = f"{indicator_period}-period Relative Strength Index"
+                    indicator_description = f"{indicator_period_str}-period Relative Strength Index"
             elif indicator_name_upper == 'MACD':
                 macd = data.get('macd')
                 signal = data.get('signal')
@@ -274,7 +280,7 @@ def get_market_data():
                         'Middle_Band': float(middle),
                         'Lower_Band': float(lower)
                     }
-                    indicator_description = f"{indicator_period}-period Bollinger Bands"
+                    indicator_description = f"{indicator_period_str}-period Bollinger Bands"
             elif indicator_name_upper == 'STOCHRSI':
                 stochrsi_k = data.get('stochrsi') # Twelve Data returns %K as 'stochrsi'
                 stochrsi_d = data.get('stochrsi_signal') # Twelve Data returns %D as 'stochrsi_signal'
@@ -283,7 +289,7 @@ def get_market_data():
                         'StochRSI_K': float(stochrsi_k),
                         'StochRSI_D': float(stochrsi_d)
                     }
-                    indicator_description = f"{indicator_period}-period Stochastic Relative Strength Index"
+                    indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
 
             if indicator_value is not None:
                 if isinstance(indicator_value, dict):
@@ -322,7 +328,7 @@ def get_market_data():
                 f"apiKey={NEWS_API_KEY}"
             )
             print(f"Fetching news for '{news_query}' from NewsAPI.org (from: {from_date}, sort: {sort_by})...")
-            response = requests.get(news_api_url)
+            response = requests.get(api_url)
             response.raise_for_status()
             news_data = response.json()
 
