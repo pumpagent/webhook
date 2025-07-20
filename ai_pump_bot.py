@@ -180,7 +180,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 if indicator_name_upper == 'RSI':
                     value = latest_values.get('rsi')
                     if value is not None:
-                        indicator_value = float(value)
+                        indicator_value = float(str(value).replace(',', '')) # Ensure string before replace
                         indicator_description = f"{indicator_period_str}-period Relative Strength Index"
                 elif indicator_name_upper == 'MACD':
                     macd = latest_values.get('macd')
@@ -188,9 +188,9 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                     histogram = latest_values.get('histogram')
                     if all(v is not None for v in [macd, signal, histogram]):
                         indicator_value = {
-                            'MACD_Line': float(macd),
-                            'Signal_Line': float(signal),
-                            'Histogram': float(histogram)
+                            'MACD_Line': float(str(macd).replace(',', '')),
+                            'Signal_Line': float(str(signal).replace(',', '')),
+                            'Histogram': float(str(histogram).replace(',', ''))
                         }
                         indicator_description = "Moving Average Convergence D-I-vergence"
                 elif indicator_name_upper == 'BBANDS':
@@ -199,9 +199,9 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                     lower = latest_values.get('lower')
                     if all(v is not None for v in [upper, middle, lower]):
                         indicator_value = {
-                            'Upper_Band': float(upper),
-                            'Middle_Band': float(middle),
-                            'Lower_Band': float(lower)
+                            'Upper_Band': float(str(upper).replace(',', '')),
+                            'Middle_Band': float(str(middle).replace(',', '')),
+                            'Lower_Band': float(str(lower).replace(',', ''))
                         }
                         indicator_description = f"{indicator_period_str}-period Bollinger Bands"
                 elif indicator_name_upper == 'STOCHRSI':
@@ -209,8 +209,8 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                     stochrsi_d = latest_values.get('stochrsi_signal')
                     if all(v is not None for v in [stochrsi_k, stochrsi_d]):
                         indicator_value = {
-                            'StochRSI_K': float(stochrsi_k),
-                            'StochRSI_D': float(stochrsi_d)
+                            'StochRSI_K': float(str(stochrsi_k).replace(',', '')),
+                            'StochRSI_D': float(str(stochrsi_d).replace(',', ''))
                         }
                         indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
 
@@ -227,12 +227,10 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
 
         elif data_type == 'news':
             # --- Rate Limiting for NewsAPI.org ---
-            NEWS_API_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between NewsAPI calls)
-            last_news_api_call = 0 # This needs to be managed globally for NewsAPI.org
             if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
                 time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
                 raise requests.exceptions.RequestException(
-                    f"Rate limit hit for NewsAPI.org. Please wait {time_to_wait:.2f} seconds."
+                    f"Rate limit hit for NewsAPI.org. Please wait {int(time_to_wait) + 1} seconds."
                 )
 
             if not news_query:
@@ -248,7 +246,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 f"from={from_date_str}&"
                 f"sortBy={sort_by_str}&"
                 f"language={news_language_str}&"
-                f"apiKey={os.environ.get('NEWS_API_KEY')}" # Use NEWS_API_KEY directly
+                f"apiKey={NEWS_API_KEY}" # Use NEWS_API_KEY directly
             )
             print(f"Fetching news for '{news_query}' from NewsAPI.org...")
             response = requests.get(news_api_url)
@@ -280,9 +278,8 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
         # Update last_twelve_data_call only if it was a Twelve Data call
         if data_type != 'news':
             globals()['last_twelve_data_call'] = time.time()
-        # For NewsAPI.org, its own global last_news_api_call needs to be updated.
-        # This is currently not handled correctly in _fetch_data_from_twelve_data for NewsAPI.
-        # For simplicity, we'll assume NewsAPI.org rate limit is less strict or managed externally for now.
+        else: # Update last_news_api_call for news type
+            globals()['last_news_api_call'] = time.time()
     
     api_response_cache[cache_key] = {'response_json': response_data, 'timestamp': time.time()}
     return response_data
