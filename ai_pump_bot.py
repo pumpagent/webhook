@@ -367,7 +367,7 @@ async def on_message(message):
     if message.author == client.user:
         return
 # --- NEW: Check if message is a DM and from a specific user ID ---
-    AUTHORIZED_USER_IDS = ["CryptoPump#3996", "YOUR_FRIEND_DISCORD_ID_2"] # Replace with actual IDs
+    AUTHORIZED_USER_IDS = ["Crypto Pump#3996", "YOUR_FRIEND_DISCORD_ID_2"] # Replace with actual IDs
     if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in AUTHORIZED_USER_IDS:
         print(f"Ignoring DM from unauthorized user: {message.author.id}")
         return
