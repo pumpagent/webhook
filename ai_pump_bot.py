@@ -243,7 +243,7 @@ async def on_message(message):
                         combined_analysis_context = "\n".join(collected_indicator_data)
                         
                         # --- NEW: Truncate combined_analysis_context if too long ---
-                        MAX_LLM_CONTEXT_LENGTH = 1000 # Characters - a conservative limit
+                        MAX_LLM_CONTEXT_LENGTH = 500 # Characters - a conservative limit
                         if len(combined_analysis_context) > MAX_LLM_CONTEXT_LENGTH:
                             original_len = len(combined_analysis_context)
                             combined_analysis_context = combined_analysis_context[:MAX_LLM_CONTEXT_LENGTH] + "\n... (analysis data truncated due to length)"
