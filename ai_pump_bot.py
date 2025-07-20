@@ -119,9 +119,16 @@ async def on_message(message):
         }
 
         llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
-        llm_response_first_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_first_turn)
-        llm_response_first_turn.raise_for_status()
-        llm_data_first_turn = llm_response_first_turn.json()
+        
+        try:
+            llm_response_first_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_first_turn)
+            llm_response_first_turn.raise_for_status()
+            llm_data_first_turn = llm_response_first_turn.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error connecting to Gemini LLM (first turn): {e}")
+            response_text_for_discord = "I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later."
+            await message.channel.send(response_text_for_discord)
+            return # Exit early if LLM connection fails
 
         # Check for LLM candidates and content from the first turn
         if llm_data_first_turn and llm_data_first_turn.get('candidates'):
@@ -143,12 +150,18 @@ async def on_message(message):
                             chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
 
                             # Make the request to your Flask webhook (the actual tool execution)
-                            webhook_response = requests.get(FLASK_WEBHOOK_URL, params=function_args)
-                            webhook_response.raise_for_status()
-                            tool_output_data = webhook_response.json()
-                            tool_output_text = tool_output_data.get('text', 'No specific response from market data agent.')
-                            print(f"Tool execution output: {tool_output_text}")
-
+                            try:
+                                webhook_response = requests.get(FLASK_WEBHOOK_URL, params=function_args)
+                                webhook_response.raise_for_status()
+                                tool_output_data = webhook_response.json()
+                                tool_output_text = tool_output_data.get('text', 'No specific response from market data agent.')
+                                print(f"Tool execution output: {tool_output_text}")
+                            except requests.exceptions.RequestException as e:
+                                print(f"Error connecting to Flask Webhook: {e}")
+                                response_text_for_discord = "I'm having trouble connecting to my data service webhook. Please ensure the webhook URL is correct and the service is running."
+                                await message.channel.send(response_text_for_discord)
+                                return # Exit early if webhook connection fails
+                            
                             # Add the tool output to chat history for the LLM to see
                             chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
 
@@ -163,9 +176,15 @@ async def on_message(message):
                                     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                                 ]
                             }
-                            llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
-                            llm_response_second_turn.raise_for_status()
-                            llm_data_second_turn = llm_response_second_turn.json()
+                            try:
+                                llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
+                                llm_response_second_turn.raise_for_status()
+                                llm_data_second_turn = llm_response_second_turn.json()
+                            except requests.exceptions.RequestException as e:
+                                print(f"Error connecting to Gemini LLM (second turn after tool): {e}")
+                                response_text_for_discord = "I received the data, but I'm having trouble processing it with my AI brain. Please try again later."
+                                await message.channel.send(response_text_for_discord)
+                                return # Exit early
 
                             if llm_data_second_turn and llm_data_second_turn.get('candidates'):
                                 candidate_second_turn = llm_data_second_turn['candidates'][0]
@@ -213,7 +232,7 @@ async def on_message(message):
                                 indicator_data = webhook_response.json()
                                 collected_indicator_data.append(f"The {indicator_name} for {symbol_for_analysis} is: {indicator_data.get('text', 'N/A')}")
                             except requests.exceptions.RequestException as e:
-                                collected_indicator_data.append(f"Could not retrieve {indicator_name} for {symbol_for_analysis} due to a data service error.")
+                                collected_indicator_data.append(f"Could not retrieve {indicator_name} for {symbol_for_analysis} due to a data service error: {e}")
                                 print(f"Error fetching {indicator_name}: {e}")
                             except Exception as e:
                                 collected_indicator_data.append(f"An unexpected error occurred while fetching {indicator_name} for {symbol_for_analysis}.")
@@ -246,9 +265,15 @@ async def on_message(message):
                                 {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                             ]
                         }
-                        llm_response_final_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_final_turn)
-                        llm_response_final_turn.raise_for_status()
-                        llm_data_final_turn = llm_response_final_turn.json()
+                        try:
+                            llm_response_final_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_final_turn)
+                            llm_response_final_turn.raise_for_status()
+                            llm_data_final_turn = llm_response_final_turn.json()
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error connecting to Gemini LLM (final turn after analysis data): {e}")
+                            response_text_for_discord = "I collected the analysis data, but I'm having trouble generating a full analysis with my AI brain. Please try again later."
+                            await message.channel.send(response_text_for_discord)
+                            return # Exit early
 
                         if llm_data_final_turn and llm_data_final_turn.get('candidates'):
                             candidate_final_turn = llm_data_final_turn['candidates'][0]
@@ -273,8 +298,9 @@ async def on_message(message):
 
 
     except requests.exceptions.RequestException as e:
-        print(f"Error connecting to LLM or Flask webhook: {e}")
-        response_text_for_discord = "I'm having trouble connecting to my AI brain or data service. Please try again later."
+        # This catch-all is for unexpected request errors outside of specific try blocks
+        print(f"General Request Error: {e}")
+        response_text_for_discord = "An unexpected connection error occurred. Please check network connectivity or API URLs."
     except Exception as e:
         print(f"An unexpected error occurred in bot logic: {e}")
         response_text_for_discord = "An unexpected error occurred while processing your request. My apologies."
