@@ -3,3 +3,5 @@ requests
 gunicorn
 pandas
 ta
+discord.py
+requests
