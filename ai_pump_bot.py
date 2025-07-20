@@ -32,6 +32,8 @@ CACHE_DURATION = 10 # Cache responses for 10 seconds
 conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
 MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memory for LLM context
 
+# Discord message character limit
+DISCORD_MESSAGE_MAX_LENGTH = 2000
 
 async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, outputsize=None,
                                        indicator=None, indicator_period=None, news_query=None,
