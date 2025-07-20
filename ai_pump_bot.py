@@ -206,23 +206,51 @@ async def on_message(message):
                     if not symbol_for_analysis:
                         response_text_for_discord = "Please specify a symbol to analyze (e.g., 'analyze BTC/USD')."
                     else:
-                        analysis_indicators = ['RSI', 'MACD', 'BBANDS', 'STOCHRSI']
-                        collected_indicator_data = []
+                        analysis_results = []
+                        
+                        # --- Fetch Live Price for BBANDS Context ---
+                        current_price_str = "N/A"
+                        try:
+                            live_price_params = {'data_type': 'live', 'symbol': symbol_for_analysis}
+                            live_price_response = requests.get(FLASK_WEBHOOK_URL, params=live_price_params)
+                            live_price_response.raise_for_status()
+                            live_price_data = live_price_response.json()
+                            # Extract price from the text, e.g., "The current price of BTC/USD is $65,000.00."
+                            price_text = live_price_data.get('text', '')
+                            import re
+                            match = re.search(r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', price_text)
+                            if match:
+                                current_price_str = match.group(1).replace(',', '')
+                                print(f"Current price for {symbol_for_analysis}: {current_price_str}")
+                            else:
+                                print(f"Could not parse current price from: {price_text}")
 
-                        for indicator_name in analysis_indicators:
-                            # Default period for general analysis, can be customized or made dynamic
-                            indicator_period = '14' # Common period for many indicators
-                            if indicator_name == 'MACD':
-                                indicator_period = '0' # MACD doesn't typically use a single 'period' param in this context
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error fetching live price for BBANDS analysis: {e}")
+                            current_price_str = "Error fetching live price"
+                        except Exception as e:
+                            print(f"Unexpected error parsing live price: {e}")
+                            current_price_str = "Error parsing live price"
 
-                            # Prepare args for the market_data webhook
+
+                        # --- Fetch and Analyze Indicators ---
+                        indicators_to_fetch = {
+                            'RSI': {'period': '14'},
+                            'MACD': {'period': '0'}, # Period is often fixed for MACD
+                            'BBANDS': {'period': '20'}, # Common BBANDS period
+                            'STOCHRSI': {'period': '14'}
+                        }
+                        
+                        for indicator_name, params in indicators_to_fetch.items():
+                            indicator_period = params['period']
+
                             analysis_params = {
                                 'data_type': 'indicator',
                                 'symbol': symbol_for_analysis,
                                 'indicator': indicator_name,
                                 'indicator_period': indicator_period,
-                                'interval': '1day', # Consistent interval for analysis
-                                'outputsize': '300' # Ensure enough data for all indicators
+                                'interval': '1day', # Consistent interval
+                                'outputsize': '300' # Ensure enough data
                             }
 
                             try:
@@ -230,37 +258,78 @@ async def on_message(message):
                                 webhook_response = requests.get(FLASK_WEBHOOK_URL, params=analysis_params)
                                 webhook_response.raise_for_status()
                                 indicator_data = webhook_response.json()
-                                # Corrected: Append only the text content from the Flask webhook response
-                                collected_indicator_data.append(indicator_data.get('text', f"{indicator_name} data N/A"))
+                                indicator_text = indicator_data.get('text', f"{indicator_name} data N/A")
+                                
+                                # --- Local Bullish/Bearish Assessment ---
+                                assessment = "Neutral"
+                                if "The" in indicator_text and "is" in indicator_text: # Basic check for valid data
+                                    if indicator_name == 'RSI':
+                                        try:
+                                            rsi_val = float(indicator_text.split(' is ')[-1].replace('.', '')) # Remove comma for float conversion
+                                            if rsi_val > 70: assessment = "Bearish" # Overbought
+                                            elif rsi_val < 30: assessment = "Bullish" # Oversold
+                                        except ValueError: pass
+                                    elif indicator_name == 'MACD':
+                                        if "MACD_Line:" in indicator_text and "Signal_Line:" in indicator_text:
+                                            try:
+                                                macd_line_val = float(indicator_text.split('MACD_Line: ')[1].split('.')[0].replace(',', ''))
+                                                signal_line_val = float(indicator_text.split('Signal_Line: ')[1].split('.')[0].replace(',', ''))
+                                                if macd_line_val > signal_line_val: assessment = "Bullish"
+                                                elif macd_line_val < signal_line_val: assessment = "Bearish"
+                                            except (ValueError, IndexError): pass
+                                    elif indicator_name == 'BBANDS' and current_price_str != "N/A" and "Error" not in current_price_str:
+                                        if "Upper_Band:" in indicator_text and "Lower_Band:" in indicator_text:
+                                            try:
+                                                upper_band = float(indicator_text.split('Upper_Band: ')[1].split('.')[0].replace(',', ''))
+                                                lower_band = float(indicator_text.split('Lower_Band: ')[1].split('.')[0].replace(',', ''))
+                                                current_price_val = float(current_price_str)
+                                                
+                                                if current_price_val > upper_band: assessment = "Bearish" # Price above upper band
+                                                elif current_price_val < lower_band: assessment = "Bullish" # Price below lower band
+                                                else: assessment = "Neutral" # Price within bands
+                                            except (ValueError, IndexError): pass
+                                    elif indicator_name == 'STOCHRSI':
+                                        if "StochRSI_K:" in indicator_text and "StochRSI_D:" in indicator_text:
+                                            try:
+                                                stochrsi_k_val = float(indicator_text.split('StochRSI_K: ')[1].split('.')[0].replace(',', ''))
+                                                stochrsi_d_val = float(indicator_text.split('StochRSI_D: ')[1].split('.')[0].replace(',', ''))
+                                                
+                                                if stochrsi_k_val > 80: assessment = "Bearish" # Overbought
+                                                elif stochrsi_k_val < 20: assessment = "Bullish" # Oversold
+                                                elif stochrsi_k_val > stochrsi_d_val: assessment = "Bullish" # K crossing above D
+                                                elif stochrsi_k_val < stochrsi_d_val: assessment = "Bearish" # K crossing below D
+                                            except (ValueError, IndexError): pass
+                                
+                                analysis_results.append(f"{indicator_name}: {assessment}")
                             except requests.exceptions.RequestException as e:
-                                collected_indicator_data.append(f"Could not retrieve {indicator_name} for {symbol_for_analysis} due to a data service error: {e}")
+                                analysis_results.append(f"{indicator_name}: Data Missing (Error: {e})")
                                 print(f"Error fetching {indicator_name}: {e}")
                             except Exception as e:
-                                collected_indicator_data.append(f"An unexpected error occurred while fetching {indicator_name} for {symbol_for_analysis}.")
+                                analysis_results.append(f"{indicator_name}: Data Missing (Unexpected Error: {e})")
                                 print(f"Unexpected error fetching {indicator_name}: {e}")
 
-                        # Combine all collected data into a single string for the LLM
-                        combined_analysis_context = "\n".join(collected_indicator_data)
+                        # Combine all collected and analyzed data into a single string for the LLM
+                        combined_analysis_context = "\n".join(analysis_results)
                         
-                        # --- NEW: Truncate combined_analysis_context if too long ---
+                        # --- Truncate combined_analysis_context if too long ---
                         MAX_LLM_CONTEXT_LENGTH = 500 # Characters - a conservative limit
                         if len(combined_analysis_context) > MAX_LLM_CONTEXT_LENGTH:
                             original_len = len(combined_analysis_context)
-                            combined_analysis_context = combined_analysis_context[:MAX_LLM_CONTEXT_LENGTH] + "\n... (analysis data truncated due to length)"
+                            combined_analysis_context = combined_analysis_context[:MAX_LLM_CONTEXT_LENGTH] + "\n... (analysis data truncated)"
                             print(f"Combined analysis context truncated from {original_len} to {len(combined_analysis_context)} characters.")
 
-                        # --- NEW: Log the context sent to LLM for debugging ---
+                        # --- Log the context sent to LLM for debugging ---
                         print(f"Context sent to LLM for final analysis:\n{combined_analysis_context}")
 
                         # Add the combined tool output to chat history for the LLM to see
-                        # This simulates a single function call with comprehensive output
                         chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": "get_market_data", "response": {"text": combined_analysis_context}}}]})
                         
                         # Add a system instruction to guide the LLM's analysis
                         system_instruction = (
-                            "Based on the following technical indicator data for "
-                            f"{symbol_for_analysis}, provide a one-word analysis (Bullish or Bearish) for *each* indicator separately. "
-                            "Do not provide detailed reasoning, just the one-word assessment. "
+                            "Based on the following technical indicator assessments for "
+                            f"{symbol_for_analysis}, summarize the overall sentiment (Bullish, Bearish, or Mixed). "
+                            "Present the assessment for each indicator clearly, then give a concise overall summary. "
+                            "Example: 'RSI: Bullish, MACD: Bearish. Overall: Mixed sentiment.'"
                             "If data is missing for an indicator, state 'N/A' or 'Data Missing'."
                         )
                         chat_history.insert(0, {"role": "system", "parts": [{"text": system_instruction}]})
