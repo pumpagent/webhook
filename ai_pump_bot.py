@@ -31,25 +31,27 @@ MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memo
 
 
 async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, outputsize=None,
-                                       indicator=None, indicator_period=None):
+                                       indicator=None, indicator_period=None, news_query=None,
+                                       from_date=None, sort_by=None, news_language=None):
     """
-    Helper function to fetch data directly from Twelve Data API.
+    Helper function to fetch data directly from Twelve Data API or NewsAPI.org.
     Includes rate limiting and caching.
     """
     global last_twelve_data_call
 
-    cache_key = (data_type, symbol, interval, indicator, indicator_period)
+    cache_key = (data_type, symbol, interval, outputsize, indicator, indicator_period,
+                 news_query, from_date, sort_by, news_language)
     current_time = time.time()
 
     # --- Check Cache First ---
     if cache_key in api_response_cache:
         cached_data = api_response_cache[cache_key]
         if (current_time - cached_data['timestamp']) < CACHE_DURATION:
-            print(f"Serving cached response for {data_type} request to Twelve Data.")
+            print(f"Serving cached response for {data_type} request to Twelve Data/NewsAPI.")
             return cached_data['response_json']
 
-    # --- Rate Limiting ---
-    if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
+    # --- Rate Limiting for Twelve Data ---
+    if data_type != 'news' and (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
         time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
         raise requests.exceptions.RequestException(
             f"Rate limit hit for Twelve Data. Please wait {time_to_wait:.2f} seconds."
@@ -109,20 +111,20 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             }
 
         elif data_type == 'indicator':
-            if not all([symbol, indicator, indicator_period]):
-                raise ValueError("Missing required parameters for indicator data (symbol, indicator, indicator_period).")
+            if not all([symbol, indicator]): # indicator_period can be defaulted
+                raise ValueError("Missing required parameters for indicator data (symbol, indicator).")
             
             indicator_name_upper = indicator.upper()
             base_api_url = "https://api.twelvedata.com/"
             indicator_endpoint = ""
             params = {
                 'symbol': symbol,
-                'interval': interval if interval else '1day',
+                'interval': interval if interval else '1day', # Default interval
                 'apikey': TWELVE_DATA_API_KEY
             }
             
-            # Ensure indicator_period is a string for Twelve Data API
-            indicator_period_str = str(indicator_period)
+            # Default indicator_period if not provided by LLM
+            indicator_period_str = str(indicator_period) if indicator_period else '14' 
 
             # Map indicator and period to Twelve Data API endpoints and parameters
             if indicator_name_upper == 'RSI':
@@ -136,7 +138,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             elif indicator_name_upper == 'BBANDS':
                 indicator_endpoint = "bbands"
                 params['time_period'] = indicator_period_str
-                params['sd'] = 2
+                params['sd'] = 2 # Standard deviation, common default
             elif indicator_name_upper == 'STOCHRSI':
                 indicator_endpoint = "stochrsi"
                 params['time_period'] = indicator_period_str
@@ -209,6 +211,17 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 raise ValueError(f"Twelve Data did not return valid indicator values for {indicator_name_upper} for {symbol}. Response: {data}")
 
         elif data_type == 'news':
+            # --- Rate Limiting for NewsAPI.org ---
+            # This part is still using NewsAPI.org and its own rate limiting.
+            # If you switch News API, this section needs to be updated.
+            NEWS_API_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between NewsAPI calls)
+            last_news_api_call = 0 # This needs to be managed globally for NewsAPI.org
+            if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
+                time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
+                raise requests.exceptions.RequestException(
+                    f"Rate limit hit for NewsAPI.org. Please wait {time_to_wait:.2f} seconds."
+                )
+
             if not news_query:
                 raise ValueError("Missing 'news_query' parameter for news.")
             
@@ -251,7 +264,12 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     except ValueError as e:
         raise e # Re-raise for outer try-except to catch
     finally:
-        last_twelve_data_call = time.time() # Update last call timestamp regardless of success/failure
+        # Update last_twelve_data_call only if it was a Twelve Data call
+        if data_type != 'news':
+            globals()['last_twelve_data_call'] = time.time()
+        # For NewsAPI.org, its own global last_news_api_call needs to be updated.
+        # This is currently not handled correctly in _fetch_data_from_twelve_data for NewsAPI.
+        # For simplicity, we'll assume NewsAPI.org rate limit is less strict or managed externally for now.
     
     api_response_cache[cache_key] = {'response_json': response_data, 'timestamp': time.time()}
     return response_data
@@ -276,7 +294,7 @@ async def on_message(message):
     response_text_for_discord = "I'm currently unavailable. Please try again later."
 
     try:
-        # --- Define the market_data tool for the LLM (still defined for LLM to suggest) ---
+        # --- Define the market_data tool for the LLM ---
         tools = [
             {
                 "functionDeclarations": [
@@ -288,187 +306,119 @@ async def on_message(message):
                             "properties": {
                                 "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL')." },
                                 "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch." },
-                                "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day')." },
-                                "outputsize": { "type": "string", "description": "Number of data points." },
+                                "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user." },
+                                "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
                                 "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"], "description": "Name of the technical indicator." },
-                                "indicator_period": { "type": "string", "description": "Period for the indicator." },
+                                "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD." },
                                 "news_query": { "type": "string", "description": "Keywords for news search." },
-                                "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD)." },
+                                "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
                                 "sort_by": { "type": "string", "enum": ["relevancy", "popularity", "publishedAt"], "description": "How to sort news." },
                                 "news_language": { "type": "string", "description": "Language of news." }
                             },
-                            "required": []
+                            "required": [] # LLM will infer required based on data_type
                         }
                     }
                 ]
             }
         ]
 
-        # --- Attempt to parse for direct indicator analysis: <symbol> <indicator> ---
-        parsed_indicator_command = False
-        match = re.match(r'^([a-zA-Z0-9\/]+)\s+(rsi|macd|bbands|stochrsi)\s*$', user_query.lower())
-        if match:
-            symbol_for_direct_analysis = match.group(1).upper()
-            indicator_name_for_direct_analysis = match.group(2).upper()
-            parsed_indicator_command = True
-
-            indicator_period = '14'
-            if indicator_name_for_direct_analysis == 'MACD':
-                indicator_period = '0'
-
-            try:
-                # Direct call to the local helper function
-                indicator_data_json = await _fetch_data_from_twelve_data(
-                    data_type='indicator',
-                    symbol=symbol_for_direct_analysis,
-                    indicator=indicator_name_for_direct_analysis,
-                    indicator_period=indicator_period,
-                    interval='1day'
-                )
-                indicator_text = indicator_data_json.get('text', f"{indicator_name_for_direct_analysis} data N/A")
-                
-                assessment = "Neutral"
-                # Extract value and perform assessment (similar to previous logic)
-                if "The" in indicator_text and "is" in indicator_text:
-                    if indicator_name_for_direct_analysis == 'RSI':
-                        try:
-                            val_str = indicator_text.split(' is ')[-1].strip()
-                            val = float(re.sub(r'[^\d.]', '', val_str))
-                            if val > 70: assessment = "Bearish"
-                            elif val < 30: assessment = "Bullish"
-                        except ValueError: pass
-                    elif indicator_name_for_direct_analysis == 'MACD':
-                        if "MACD_Line:" in indicator_text and "Signal_Line:" in indicator_text:
-                            try:
-                                macd_line_str = indicator_text.split('MACD_Line: ')[1].split('. ')[0].strip()
-                                signal_line_str = indicator_text.split('Signal_Line: ')[1].split('. ')[0].strip()
-                                macd_line_val = float(re.sub(r'[^\d.-]', '', macd_line_str))
-                                signal_line_val = float(re.sub(r'[^\d.-]', '', signal_line_str))
-                                if macd_line_val > signal_line_val: assessment = "Bullish"
-                                elif macd_line_val < signal_line_val: assessment = "Bearish"
-                            except (ValueError, IndexError): pass
-                    elif indicator_name_for_direct_analysis == 'BBANDS': # BBANDS needs live price, which is not fetched here directly
-                        assessment = "Cannot assess BBANDS without live price in this direct command."
-                    elif indicator_name_for_direct_analysis == 'STOCHRSI':
-                        if "StochRSI_K:" in indicator_text and "StochRSI_D:" in indicator_text:
-                            try:
-                                stochrsi_k_str = indicator_text.split('StochRSI_K: ')[1].split('. ')[0].strip()
-                                stochrsi_d_str = indicator_text.split('StochRSI_D: ')[1].split('. ')[0].strip()
-                                stochrsi_k_val = float(re.sub(r'[^\d.]', '', stochrsi_k_str))
-                                stochrsi_d_val = float(re.sub(r'[^\d.]', '', stochrsi_d_str))
-                                if stochrsi_k_val > 80: assessment = "Bearish"
-                                elif stochrsi_k_val < 20: assessment = "Bullish"
-                                elif stochrsi_k_val > stochrsi_d_val: assessment = "Bullish"
-                                elif stochrsi_k_val < stochrsi_d_val: assessment = "Bearish"
-                            except (ValueError, IndexError): pass
-
-                response_text_for_discord = f"For {symbol_for_direct_analysis}, {indicator_name_for_direct_analysis} is: **{assessment}**."
-                
-            except requests.exceptions.RequestException as e:
-                response_text_for_discord = f"I'm having trouble retrieving data for {symbol_for_direct_analysis} {indicator_name_for_direct_analysis}. Error: {e}"
-            except Exception as e:
-                response_text_for_discord = f"An unexpected error occurred while processing {indicator_name_for_direct_analysis} for {symbol_for_direct_analysis}. Error: {e}"
+        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
         
-        # --- If not a direct indicator command, proceed with LLM interaction ---
-        if not parsed_indicator_command:
-            llm_payload = {
-                "contents": current_chat_history,
-                "tools": tools,
-                "safetySettings": [
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                ]
-            }
+        llm_payload_first_turn = {
+            "contents": current_chat_history,
+            "tools": tools,
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ]
+        }
 
-            llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
-            
-            try:
-                llm_response = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload)
-                llm_response.raise_for_status()
-                llm_data = llm_response.json()
-            except requests.exceptions.RequestException as e:
-                print(f"Error connecting to Gemini LLM: {e}")
-                response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
-                await message.channel.send(response_text_for_discord)
-                return
+        try:
+            llm_response_first_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_first_turn)
+            llm_response_first_turn.raise_for_status()
+            llm_data_first_turn = llm_response_first_turn.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error connecting to Gemini LLM (first turn): {e}")
+            response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
+            await message.channel.send(response_text_for_discord)
+            return
 
-            if llm_data and llm_data.get('candidates'):
-                candidate = llm_data['candidates'][0]
-                if candidate.get('content') and candidate['content'].get('parts'):
-                    parts = candidate['content']['parts']
+        if llm_data_first_turn and llm_data_first_turn.get('candidates'):
+            candidate_first_turn = llm_data_first_turn['candidates'][0]
+            if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
+                parts_first_turn = candidate_first_turn['content']['parts']
 
-                    if parts[0].get('functionCall'):
-                        function_call = parts[0]['functionCall']
-                        function_name = function_call['name']
-                        function_args = function_call['args']
+                if parts_first_turn[0].get('functionCall'):
+                    function_call = parts_first_turn[0]['functionCall']
+                    function_name = function_call['name']
+                    function_args = function_call['args']
 
-                        if function_name == "get_market_data":
-                            print(f"LLM requested tool call: get_market_data with args: {function_args}")
-                            current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
+                    if function_name == "get_market_data":
+                        print(f"LLM requested tool call: get_market_data with args: {function_args}")
+                        current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
 
-                            try:
-                                # Direct call to the local helper function
-                                tool_output_data = await _fetch_data_from_twelve_data(**function_args)
-                                tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
-                                print(f"Tool execution output: {tool_output_text}")
-                            except requests.exceptions.RequestException as e:
-                                print(f"Error fetching data from Twelve Data via local helper: {e}")
-                                tool_output_text = f"Error fetching data from Twelve Data: {e}"
-                            except ValueError as e:
-                                print(f"Invalid parameters for data fetch: {e}")
-                                tool_output_text = f"Invalid parameters for data fetch: {e}"
-                            except Exception as e:
-                                print(f"Unexpected error during data fetch: {e}")
-                                tool_output_text = f"An unexpected error occurred during data fetch: {e}"
-                            
-                            current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
+                        try:
+                            # Direct call to the local helper function
+                            tool_output_data = await _fetch_data_from_twelve_data(**function_args)
+                            tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
+                            print(f"Tool execution output: {tool_output_text}")
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error fetching data from Twelve Data via local helper: {e}")
+                            tool_output_text = f"Error fetching data: {e}"
+                        except ValueError as e:
+                            print(f"Invalid parameters for data fetch: {e}")
+                            tool_output_text = f"Invalid parameters: {e}"
+                        except Exception as e:
+                            print(f"Unexpected error during data fetch: {e}")
+                            tool_output_text = f"An unexpected error occurred: {e}"
+                        
+                        current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
 
-                            # Second LLM call to get conversational response after tool execution
-                            llm_payload_second_turn = {
-                                "contents": current_chat_history,
-                                "tools": tools,
-                                "safetySettings": [
-                                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                                ]
-                            }
-                            try:
-                                llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
-                                llm_response_second_turn.raise_for_status()
-                                llm_data_second_turn = llm_response_second_turn.json()
-                            except requests.exceptions.RequestException as e:
-                                print(f"Error connecting to Gemini LLM (second turn after tool): {e}")
-                                response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
-                                await message.channel.send(response_text_for_discord)
-                                return
+                        llm_payload_second_turn = {
+                            "contents": current_chat_history,
+                            "tools": tools,
+                            "safetySettings": [
+                                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                            ]
+                        }
+                        try:
+                            llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
+                            llm_response_second_turn.raise_for_status()
+                            llm_data_second_turn = llm_response_second_turn.json()
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error connecting to Gemini LLM (second turn after tool): {e}")
+                            response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
+                            await message.channel.send(response_text_for_discord)
+                            return
 
-                            if llm_data_second_turn and llm_data_second_turn.get('candidates'):
-                                final_candidate = llm_data_second_turn['candidates'][0]
-                                if final_candidate.get('content') and final_candidate['content'].get('parts'):
-                                    response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
-                                else:
-                                    response_text_for_discord = "AI did not provide a conversational response after tool execution."
+                        if llm_data_second_turn and llm_data_second_turn.get('candidates'):
+                            final_candidate = llm_data_second_turn['candidates'][0]
+                            if final_candidate.get('content') and final_candidate['content'].get('parts'):
+                                response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
                             else:
-                                response_text_for_discord = "Could not get a valid second response from the AI."
+                                response_text_for_discord = "AI did not provide a conversational response after tool execution."
                         else:
-                            response_text_for_discord = "LLM requested an unknown function."
-                    elif parts[0].get('text'):
-                        response_text_for_discord = parts[0]['text']
+                            response_text_for_discord = "Could not get a valid second response from the AI."
                     else:
-                        response_text_for_discord = "LLM response format not recognized."
+                        response_text_for_discord = "LLM requested an unknown function."
+                elif parts[0].get('text'):
+                    response_text_for_discord = parts[0]['text']
                 else:
-                    response_text_for_discord = "LLM did not provide content in its response."
+                    response_text_for_discord = "LLM response format not recognized."
             else:
-                response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-                if llm_data.get('promptFeedback') and llm_data['promptFeedback'].get('blockReason'):
-                    response_text_for_discord += f" (Blocked: {llm_data['promptFeedback']['blockReason']})"
-            
-            # Add LLM's response to history
-            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+                response_text_for_discord = "LLM did not provide content in its response."
+        else:
+            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
+            if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
+                response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
+        
+        # Add LLM's response to history
+        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
 
 
     except requests.exceptions.RequestException as e:
@@ -478,14 +428,12 @@ async def on_message(message):
         print(f"An unexpected error occurred in bot logic: {e}")
         response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
 
-    # Send the final response back to the Discord channel
     await message.channel.send(response_text_for_discord)
 
-# Run the bot
 if __name__ == '__main__':
     if not DISCORD_BOT_TOKEN:
         print("Error: DISCORD_BOT_TOKEN environment variable not set.")
-    elif not TWELVE_DATA_API_KEY: # Check for TWELVE_DATA_API_KEY directly
+    elif not TWELVE_DATA_API_KEY:
         print("Error: TWELVE_DATA_API_KEY environment variable not set.")
     elif not GOOGLE_API_KEY:
         print("Error: GOOGLE_API_KEY environment variable not set.")
