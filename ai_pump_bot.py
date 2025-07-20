@@ -366,7 +366,12 @@ async def on_message(message):
     """Event that fires when a message is sent in a channel the bot can see."""
     if message.author == client.user:
         return
-
+ # --- NEW: Check if message is a DM and from a specific user ID ---
+    AUTHORIZED_USER_IDS = ["YOUR_FRIEND_DISCORD_ID_1", "YOUR_FRIEND_DISCORD_ID_2"] # Replace with actual IDs
+    if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in AUTHORIZED_USER_IDS:
+        print(f"Ignoring DM from unauthorized user: {message.author.id}")
+        return
+    # --- END NEW ---
     user_id = str(message.author.id)
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
