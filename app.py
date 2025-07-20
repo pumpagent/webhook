@@ -194,8 +194,8 @@ def get_market_data():
                     requested_outputsize_to_api = max(requested_outputsize_to_api, min_required_for_calculation)
                 else:
                     # Default to a robust size if not specified by user
-                    # Adjusted default to 200, or min_required + 20 buffer, whichever is larger
-                    requested_outputsize_to_api = max(min_required_for_calculation + 20, 200) 
+                    # Adjusted default to 300, or min_required + 3 buffer, whichever is larger
+                    requested_outputsize_to_api = max(min_required_for_calculation + 3, 300) 
 
                 outputsize = requested_outputsize_to_api # Use this for the API call
                 print(f"Adjusted 'outputsize' to '{outputsize}' for indicator calculation.")
