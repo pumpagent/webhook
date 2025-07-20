@@ -230,7 +230,8 @@ async def on_message(message):
                                 webhook_response = requests.get(FLASK_WEBHOOK_URL, params=analysis_params)
                                 webhook_response.raise_for_status()
                                 indicator_data = webhook_response.json()
-                                collected_indicator_data.append(f"The {indicator_name} for {symbol_for_analysis} is: {indicator_data.get('text', 'N/A')}")
+                                # Corrected: Append only the text content from the Flask webhook response
+                                collected_indicator_data.append(indicator_data.get('text', f"{indicator_name} data N/A"))
                             except requests.exceptions.RequestException as e:
                                 collected_indicator_data.append(f"Could not retrieve {indicator_name} for {symbol_for_analysis} due to a data service error: {e}")
                                 print(f"Error fetching {indicator_name}: {e}")
