@@ -4,12 +4,13 @@ import requests
 import json
 import re # Import regex for parsing indicator values
 import time # For rate limiting
+from datetime import datetime, timedelta # Import for date handling
 
 # --- API Keys and URLs (Set as Environment Variables on Render) ---
 DISCORD_BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
-# Removed FLASK_WEBHOOK_URL as data will be pulled directly from Twelve Data
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY') # Now directly used by the bot
+TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY') # Directly used by the bot
+NEWS_API_KEY = os.environ.get('NEWS_API_KEY') # Directly used by the bot
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
@@ -19,9 +20,11 @@ intents.presences = True
 
 client = discord.Client(intents=intents)
 
-# --- Rate Limiting & Caching Configuration (Moved from Flask app) ---
+# --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
 TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between Twelve Data calls)
+last_news_api_call = 0
+NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
 api_response_cache = {}
 CACHE_DURATION = 10 # Cache responses for 10 seconds
 
@@ -37,7 +40,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     Helper function to fetch data directly from Twelve Data API or NewsAPI.org.
     Includes rate limiting and caching.
     """
-    global last_twelve_data_call
+    global last_twelve_data_call, last_news_api_call
 
     cache_key = (data_type, symbol, interval, outputsize, indicator, indicator_period,
                  news_query, from_date, sort_by, news_language)
@@ -50,12 +53,20 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             print(f"Serving cached response for {data_type} request to Twelve Data/NewsAPI.")
             return cached_data['response_json']
 
-    # --- Rate Limiting for Twelve Data ---
-    if data_type != 'news' and (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
-        time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
-        raise requests.exceptions.RequestException(
-            f"Rate limit hit for Twelve Data. Please wait {time_to_wait:.2f} seconds."
-        )
+    # --- Rate Limiting ---
+    if data_type != 'news':
+        if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
+            time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
+            raise requests.exceptions.RequestException(
+                f"Rate limit hit for Twelve Data. Please wait {time_to_wait:.2f} seconds."
+            )
+    else: # data_type == 'news'
+        if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
+            time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
+            raise requests.exceptions.RequestException(
+                f"Rate limit hit for NewsAPI.org. Please wait {int(time_to_wait) + 1} seconds."
+            )
+
 
     readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() if symbol else "N/A"
     response_data = {} # To store the final JSON response
@@ -163,15 +174,15 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             indicator_description = ""
             
             # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
-            if indicator_name_upper == 'RSI':
-                if data.get('values') and len(data['values']) > 0:
-                    value = data['values'][0].get('rsi') # Get latest RSI value
+            if data.get('values') and len(data['values']) > 0:
+                latest_values = data['values'][0] # Get the most recent data point
+
+                if indicator_name_upper == 'RSI':
+                    value = latest_values.get('rsi')
                     if value is not None:
                         indicator_value = float(value)
                         indicator_description = f"{indicator_period_str}-period Relative Strength Index"
-            elif indicator_name_upper == 'MACD':
-                if data.get('values') and len(data['values']) > 0:
-                    latest_values = data['values'][0]
+                elif indicator_name_upper == 'MACD':
                     macd = latest_values.get('macd')
                     signal = latest_values.get('signal')
                     histogram = latest_values.get('histogram')
@@ -182,9 +193,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                             'Histogram': float(histogram)
                         }
                         indicator_description = "Moving Average Convergence D-I-vergence"
-            elif indicator_name_upper == 'BBANDS':
-                if data.get('values') and len(data['values']) > 0:
-                    latest_values = data['values'][0]
+                elif indicator_name_upper == 'BBANDS':
                     upper = latest_values.get('upper')
                     middle = latest_values.get('middle')
                     lower = latest_values.get('lower')
@@ -195,9 +204,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                             'Lower_Band': float(lower)
                         }
                         indicator_description = f"{indicator_period_str}-period Bollinger Bands"
-            elif indicator_name_upper == 'STOCHRSI':
-                if data.get('values') and len(data['values']) > 0:
-                    latest_values = data['values'][0]
+                elif indicator_name_upper == 'STOCHRSI':
                     stochrsi_k = latest_values.get('stochrsi')
                     stochrsi_d = latest_values.get('stochrsi_signal')
                     if all(v is not None for v in [stochrsi_k, stochrsi_d]):
