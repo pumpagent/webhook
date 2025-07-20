@@ -1,12 +1,18 @@
 import os
 import discord
 import requests
+import json # Import json for parsing LLM tool calls
 
-# Discord Bot Token (get this from Discord Developer Portal)
+# --- API Keys and URLs (Set as Environment Variables on Render) ---
+# Discord Bot Token (from Discord Developer Portal)
 DISCORD_BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
-# Your Flask Webhook URL (e.g., from Render)
+# Your Flask Webhook URL (e.g., https://pricelookupwebhook.onrender.com/market_data)
 FLASK_WEBHOOK_URL = os.environ.get('FLASK_WEBHOOK_URL')
+# Google API Key for Gemini (ensure this is set for LLM calls)
+GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 
+
+# --- Discord Bot Setup ---
 # Define Discord intents (crucial for message content)
 intents = discord.Intents.default()
 intents.message_content = True # Enable message content intent
@@ -28,65 +34,139 @@ async def on_message(message):
     if message.author == client.user:
         return
 
-    # Check if the message starts with a specific prefix (e.g., '!')
-    # or if the bot is mentioned. For simplicity, let's assume direct messages or mentions.
-    # For a general chatbot, you might want to process all messages in certain channels.
-
-    # For this example, we'll assume any message not from the bot is a query.
-    # You might want to add logic here to only respond in specific channels
-    # or if the bot is explicitly explicitly mentioned.
-
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author}")
 
-    # Prepare parameters for your Flask webhook
-    # You'll need to parse the user_query to extract 'symbol', 'data_type', 'indicator', etc.
-    # This is the most complex part and depends on how you want users to phrase queries.
-    # For example: "price BTC/USD", "RSI AAPL 14", "news Bitcoin"
+    # Initialize chat history for the LLM
+    chat_history = []
+    chat_history.append({"role": "user", "parts": [{"text": user_query}]})
 
-    # --- Example: Simple parsing for demonstration ---
-    params = {}
-    response_text_for_discord = "I couldn't understand your request. Please format it like 'price BTC/USD' or 'RSI AAPL 14'."
+    response_text_for_discord = "I'm currently unavailable. Please try again later."
 
     try:
-        parts = user_query.split()
-        if not parts:
-            await message.channel.send(response_text_for_discord)
-            return
+        # --- Define the market_data tool for the LLM ---
+        # This tells the LLM about your Flask webhook and its parameters
+        tools = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "get_market_data",
+                        "description": "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": {
+                                    "type": "string",
+                                    "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL') for price/TA. Required for 'live', 'historical', 'indicator' data types."
+                                },
+                                "data_type": {
+                                    "type": "string",
+                                    "enum": ["live", "historical", "indicator", "news"],
+                                    "description": "Type of data to fetch: 'live', 'historical', 'indicator', or 'news'. Defaults to 'live'."
+                                },
+                                "interval": {
+                                    "type": "string",
+                                    "description": "Time interval (e.g., '1min', '1day'). Required for 'historical' or 'indicator' data. Defaults to '1day'."
+                                },
+                                "outputsize": {
+                                    "type": "string",
+                                    "description": "Number of data points to retrieve. Defaults to '50' for historical, adjusted for indicator. Should be a whole number string."
+                                },
+                                "indicator": {
+                                    "type": "string",
+                                    "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"],
+                                    "description": "Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS', 'STOCHRSI'). Required if 'data_type' is 'indicator'."
+                                },
+                                "indicator_period": {
+                                    "type": "string",
+                                    "description": "Period for the indicator (e.g., '14', '20', '50'). Required if 'indicator' is specified. Should be a whole number string."
+                                },
+                                "news_query": {
+                                    "type": "string",
+                                    "description": "Keywords for news search. Required if 'data_type' is 'news'."
+                                },
+                                "from_date": {
+                                    "type": "string",
+                                    "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago."
+                                },
+                                "sort_by": {
+                                    "type": "string",
+                                    "enum": ["relevancy", "popularity", "publishedAt"],
+                                    "description": "How to sort news ('relevancy', 'popularity', 'publishedAt'). Defaults to 'publishedAt'."
+                                },
+                                "news_language": {
+                                    "type": "string",
+                                    "description": "Language of news (e.g., 'en'). Defaults to 'en'."
+                                }
+                            },
+                            "required": [] # LLM will infer required based on data_type
+                        }
+                    }
+                ]
+            }
+        ]
 
-        command = parts[0].lower()
-        if command == "price" and len(parts) >= 2:
-            params = {'data_type': 'live', 'symbol': parts[1]}
-        elif command == "historical" and len(parts) >= 2:
-            params = {'data_type': 'historical', 'symbol': parts[1]}
-            if len(parts) >= 3: params['interval'] = parts[2]
-            if len(parts) >= 4: params['outputsize'] = parts[3]
-        elif command == "indicator" and len(parts) >= 4:
-            params = {'data_type': 'indicator', 'symbol': parts[1], 'indicator': parts[2], 'indicator_period': parts[3]}
-            if len(parts) >= 5: params['interval'] = parts[4]
-            if len(parts) >= 6: params['outputsize'] = parts[5]
-        elif command == "news" and len(parts) >= 2:
-            params = {'data_type': 'news', 'news_query': ' '.join(parts[1:])}
-        else:
-            await message.channel.send(response_text_for_discord)
-            return
+        # Make a request to the Gemini LLM with tool definitions
+        llm_payload = {
+            "contents": chat_history,
+            "tools": tools,
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ]
+        }
 
-        # Make a request to your Flask webhook
-        if FLASK_WEBHOOK_URL:
-            print(f"Sending request to webhook: {FLASK_WEBHOOK_URL} with params: {params}")
-            webhook_response = requests.get(FLASK_WEBHOOK_URL, params=params)
-            webhook_response.raise_for_status() # Raise an exception for HTTP errors
-            data = webhook_response.json()
-            response_text_for_discord = data.get('text', 'No response text from AI agent.')
+        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
+        llm_response = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload)
+        llm_response.raise_for_status()
+        llm_data = llm_response.json()
+
+        # Check for LLM candidates and content
+        if llm_data and llm_data.get('candidates'):
+            candidate = llm_data['candidates'][0]
+            if candidate.get('content') and candidate['content'].get('parts'):
+                parts = candidate['content']['parts']
+
+                # --- Handle LLM's response (text or tool_calls) ---
+                if parts[0].get('functionCall'):
+                    function_call = parts[0]['functionCall']
+                    function_name = function_call['name']
+                    function_args = function_call['args']
+
+                    if function_name == "get_market_data":
+                        if FLASK_WEBHOOK_URL:
+                            print(f"LLM requested tool call: get_market_data with args: {function_args}")
+                            # Make the request to your Flask webhook
+                            webhook_response = requests.get(FLASK_WEBHOOK_URL, params=function_args)
+                            webhook_response.raise_for_status()
+                            data = webhook_response.json()
+                            response_text_for_discord = data.get('text', 'No specific response from market data agent.')
+                        else:
+                            response_text_for_discord = "Error: Flask webhook URL is not configured."
+                    else:
+                        response_text_for_discord = "LLM requested an unknown function."
+
+                elif parts[0].get('text'):
+                    # LLM generated a direct text response
+                    response_text_for_discord = parts[0]['text']
+                else:
+                    response_text_for_discord = "LLM response format not recognized."
+            else:
+                response_text_for_discord = "LLM did not provide content in its response."
         else:
-            response_text_for_discord = "Error: Flask webhook URL is not configured."
+            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
+            if llm_data.get('promptFeedback') and llm_data['promptFeedback'].get('blockReason'):
+                response_text_for_discord += f" (Blocked: {llm_data['promptFeedback']['blockReason']})"
+
 
     except requests.exceptions.RequestException as e:
-        print(f"Error connecting to Flask webhook: {e}")
-        response_text_for_discord = "I'm having trouble connecting to my data processing service. Please try again later."
+        print(f"Error connecting to LLM or Flask webhook: {e}")
+        response_text_for_discord = "I'm having trouble connecting to my AI brain or data service. Please try again later."
     except Exception as e:
         print(f"An unexpected error occurred in bot logic: {e}")
-        response_text_for_discord = "An unexpected error occurred while processing your request."
+        response_text_for_discord = "An unexpected error occurred while processing your request. My apologies."
 
     # Send the response back to the Discord channel
     await message.channel.send(response_text_for_discord)
@@ -97,5 +177,8 @@ if __name__ == '__main__':
         print("Error: DISCORD_BOT_TOKEN environment variable not set.")
     elif not FLASK_WEBHOOK_URL:
         print("Error: FLASK_WEBHOOK_URL environment variable not set.")
+    elif not GOOGLE_API_KEY:
+        print("Error: GOOGLE_API_KEY environment variable not set.")
     else:
         client.run(DISCORD_BOT_TOKEN)
+
