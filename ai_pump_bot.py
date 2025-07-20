@@ -229,8 +229,8 @@ async def on_message(message):
                         # Add a system instruction to guide the LLM's analysis
                         system_instruction = (
                             "Based on the following technical indicator data for "
-                            f"{symbol_for_analysis}, provide a concise bullish or bearish analysis. "
-                            "Explain your reasoning based on the indicator values provided. "
+                            f"{symbol_for_analysis}, provide a bullish or bearish analysis for *each* indicator separately. "
+                            "Explain your reasoning for each indicator based on its value. "
                             "If data is missing for an indicator, acknowledge it and proceed with available data."
                         )
                         chat_history.insert(0, {"role": "system", "parts": [{"text": system_instruction}]})
