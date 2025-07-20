@@ -106,7 +106,7 @@ async def on_message(message):
             }
         ]
 
-        # --- First LLM Call: Get LLM's initial response or tool call ---
+        # --- Initial LLM Call: Determine if a tool call is needed or direct response ---
         llm_payload_first_turn = {
             "contents": chat_history,
             "tools": tools,
@@ -129,7 +129,7 @@ async def on_message(message):
             if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
                 parts_first_turn = candidate_first_turn['content']['parts']
 
-                # --- If LLM requests a tool call ---
+                # --- If LLM requests a tool call (e.g., for specific data) ---
                 if parts_first_turn[0].get('functionCall'):
                     function_call = parts_first_turn[0]['functionCall']
                     function_name = function_call['name']
@@ -181,7 +181,85 @@ async def on_message(message):
                     else:
                         response_text_for_discord = "LLM requested an unknown function."
 
-                # --- If LLM generated a direct text response (no tool call needed) ---
+                # --- Handle specific "analyze" command for comprehensive analysis ---
+                elif user_query.lower().startswith("analyze "):
+                    symbol_for_analysis = user_query.lower().replace("analyze ", "").strip().upper()
+                    if not symbol_for_analysis:
+                        response_text_for_discord = "Please specify a symbol to analyze (e.g., 'analyze BTC/USD')."
+                    else:
+                        analysis_indicators = ['RSI', 'MACD', 'BBANDS', 'STOCHRSI']
+                        collected_indicator_data = []
+
+                        for indicator_name in analysis_indicators:
+                            # Default period for general analysis, can be customized or made dynamic
+                            indicator_period = '14' # Common period for many indicators
+                            if indicator_name == 'MACD':
+                                indicator_period = '0' # MACD doesn't typically use a single 'period' param in this context
+
+                            # Prepare args for the market_data webhook
+                            analysis_params = {
+                                'data_type': 'indicator',
+                                'symbol': symbol_for_analysis,
+                                'indicator': indicator_name,
+                                'indicator_period': indicator_period,
+                                'interval': '1day', # Consistent interval for analysis
+                                'outputsize': '300' # Ensure enough data for all indicators
+                            }
+
+                            try:
+                                print(f"Fetching {indicator_name} for {symbol_for_analysis}...")
+                                webhook_response = requests.get(FLASK_WEBHOOK_URL, params=analysis_params)
+                                webhook_response.raise_for_status()
+                                indicator_data = webhook_response.json()
+                                collected_indicator_data.append(f"The {indicator_name} for {symbol_for_analysis} is: {indicator_data.get('text', 'N/A')}")
+                            except requests.exceptions.RequestException as e:
+                                collected_indicator_data.append(f"Could not retrieve {indicator_name} for {symbol_for_analysis} due to a data service error.")
+                                print(f"Error fetching {indicator_name}: {e}")
+                            except Exception as e:
+                                collected_indicator_data.append(f"An unexpected error occurred while fetching {indicator_name} for {symbol_for_analysis}.")
+                                print(f"Unexpected error fetching {indicator_name}: {e}")
+
+                        # Combine all collected data into a single string for the LLM
+                        combined_analysis_context = "\n".join(collected_indicator_data)
+                        
+                        # Add the combined tool output to chat history for the LLM to see
+                        # This simulates a single function call with comprehensive output
+                        chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": "get_market_data", "response": {"text": combined_analysis_context}}}]})
+                        
+                        # Add a system instruction to guide the LLM's analysis
+                        system_instruction = (
+                            "Based on the following technical indicator data for "
+                            f"{symbol_for_analysis}, provide a concise bullish or bearish analysis. "
+                            "Explain your reasoning based on the indicator values provided. "
+                            "If data is missing for an indicator, acknowledge it and proceed with available data."
+                        )
+                        chat_history.insert(0, {"role": "system", "parts": [{"text": system_instruction}]})
+
+
+                        # --- Final LLM Call: Generate analysis based on all collected data ---
+                        llm_payload_final_turn = {
+                            "contents": chat_history, # Updated chat history with all tool outputs
+                            "safetySettings": [
+                                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                            ]
+                        }
+                        llm_response_final_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_final_turn)
+                        llm_response_final_turn.raise_for_status()
+                        llm_data_final_turn = llm_response_final_turn.json()
+
+                        if llm_data_final_turn and llm_data_final_turn.get('candidates'):
+                            candidate_final_turn = llm_data_final_turn['candidates'][0]
+                            if candidate_final_turn.get('content') and candidate_final_turn['content'].get('parts'):
+                                response_text_for_discord = candidate_final_turn['content']['parts'][0].get('text', 'No analysis generated by AI.')
+                            else:
+                                response_text_for_discord = "AI did not provide an analysis based on the collected data."
+                        else:
+                            response_text_for_discord = "Could not get a valid analysis from the AI."
+
+                # --- If LLM generated a direct text response (no tool call needed and not an "analyze" command) ---
                 elif parts_first_turn[0].get('text'):
                     response_text_for_discord = parts_first_turn[0]['text']
                 else:
