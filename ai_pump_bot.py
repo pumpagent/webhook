@@ -200,37 +200,43 @@ async def on_message(message):
                     else:
                         response_text_for_discord = "LLM requested an unknown function."
 
-                # --- Handle specific "analyze" command for comprehensive analysis ---
-                elif user_query.lower().startswith("analyze "):
-                    symbol_for_analysis = user_query.lower().replace("analyze ", "").strip().upper()
-                    if not symbol_for_analysis:
-                        response_text_for_discord = "Please specify a symbol to analyze (e.g., 'analyze BTC/USD')."
-                    else:
+                # --- Handle sentiment-based analysis command: <symbol> <bullish/bearish> [interval] ---
+                else:
+                    user_query_lower = user_query.lower()
+                    query_parts = user_query_lower.split()
+
+                    if len(query_parts) >= 2 and (query_parts[1] == "bullish" or query_parts[1] == "bearish"):
+                        symbol_for_analysis = query_parts[0].upper()
+                        user_sentiment_input = query_parts[1]
+                        interval_for_analysis = '1day' # Default interval
+                        if len(query_parts) >= 3:
+                            interval_for_analysis = query_parts[2]
+
                         analysis_results = []
+                        overall_sentiment_score = 0 # +1 for bullish, -1 for bearish, 0 for neutral/missing
                         
                         # --- Fetch Live Price for BBANDS Context ---
-                        current_price_str = "N/A"
+                        current_price_val = None # Initialize to None
                         try:
                             live_price_params = {'data_type': 'live', 'symbol': symbol_for_analysis}
                             live_price_response = requests.get(FLASK_WEBHOOK_URL, params=live_price_params)
                             live_price_response.raise_for_status()
                             live_price_data = live_price_response.json()
-                            # Extract price from the text, e.g., "The current price of BTC/USD is $65,000.00."
                             price_text = live_price_data.get('text', '')
                             import re
                             match = re.search(r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', price_text)
                             if match:
-                                current_price_str = match.group(1).replace(',', '')
-                                print(f"Current price for {symbol_for_analysis}: {current_price_str}")
+                                current_price_val = float(match.group(1).replace(',', ''))
+                                print(f"Current price for {symbol_for_analysis}: {current_price_val}")
                             else:
                                 print(f"Could not parse current price from: {price_text}")
 
                         except requests.exceptions.RequestException as e:
                             print(f"Error fetching live price for BBANDS analysis: {e}")
-                            current_price_str = "Error fetching live price"
+                            analysis_results.append(f"Live Price: Data Missing (Error: {e})")
                         except Exception as e:
                             print(f"Unexpected error parsing live price: {e}")
-                            current_price_str = "Error parsing live price"
+                            analysis_results.append(f"Live Price: Data Missing (Unexpected Error: {e})")
 
 
                         # --- Fetch and Analyze Indicators ---
@@ -249,7 +255,7 @@ async def on_message(message):
                                 'symbol': symbol_for_analysis,
                                 'indicator': indicator_name,
                                 'indicator_period': indicator_period,
-                                'interval': '1day', # Consistent interval
+                                'interval': interval_for_analysis, # Use the specified interval
                                 'outputsize': '300' # Ensure enough data
                             }
 
@@ -265,24 +271,34 @@ async def on_message(message):
                                 if "The" in indicator_text and "is" in indicator_text: # Basic check for valid data
                                     if indicator_name == 'RSI':
                                         try:
-                                            rsi_val = float(indicator_text.split(' is ')[-1].replace('.', '')) # Remove comma for float conversion
+                                            # Extracting the numerical value from text like "The 14-period Relative Strength Index for AVAX/USD is 54.21."
+                                            # Need to handle cases where the value might be a float with a decimal point, not just comma
+                                            rsi_val_str = indicator_text.split(' is ')[-1].strip()
+                                            # Remove non-numeric characters except for the decimal point
+                                            rsi_val = float(re.sub(r'[^\d.]', '', rsi_val_str))
                                             if rsi_val > 70: assessment = "Bearish" # Overbought
                                             elif rsi_val < 30: assessment = "Bullish" # Oversold
                                         except ValueError: pass
                                     elif indicator_name == 'MACD':
                                         if "MACD_Line:" in indicator_text and "Signal_Line:" in indicator_text:
                                             try:
-                                                macd_line_val = float(indicator_text.split('MACD_Line: ')[1].split('.')[0].replace(',', ''))
-                                                signal_line_val = float(indicator_text.split('Signal_Line: ')[1].split('.')[0].replace(',', ''))
+                                                # Extracting numerical values
+                                                macd_line_str = indicator_text.split('MACD_Line: ')[1].split('. ')[0].strip()
+                                                signal_line_str = indicator_text.split('Signal_Line: ')[1].split('. ')[0].strip()
+                                                macd_line_val = float(re.sub(r'[^\d.-]', '', macd_line_str))
+                                                signal_line_val = float(re.sub(r'[^\d.-]', '', signal_line_str))
+                                                
                                                 if macd_line_val > signal_line_val: assessment = "Bullish"
                                                 elif macd_line_val < signal_line_val: assessment = "Bearish"
                                             except (ValueError, IndexError): pass
-                                    elif indicator_name == 'BBANDS' and current_price_str != "N/A" and "Error" not in current_price_str:
+                                    elif indicator_name == 'BBANDS' and current_price_val is not None:
                                         if "Upper_Band:" in indicator_text and "Lower_Band:" in indicator_text:
                                             try:
-                                                upper_band = float(indicator_text.split('Upper_Band: ')[1].split('.')[0].replace(',', ''))
-                                                lower_band = float(indicator_text.split('Lower_Band: ')[1].split('.')[0].replace(',', ''))
-                                                current_price_val = float(current_price_str)
+                                                # Extracting numerical values
+                                                upper_band_str = indicator_text.split('Upper_Band: ')[1].split('. ')[0].strip()
+                                                lower_band_str = indicator_text.split('Lower_Band: ')[1].split('. ')[0].strip()
+                                                upper_band = float(re.sub(r'[^\d.]', '', upper_band_str))
+                                                lower_band = float(re.sub(r'[^\d.]', '', lower_band_str))
                                                 
                                                 if current_price_val > upper_band: assessment = "Bearish" # Price above upper band
                                                 elif current_price_val < lower_band: assessment = "Bullish" # Price below lower band
@@ -291,8 +307,11 @@ async def on_message(message):
                                     elif indicator_name == 'STOCHRSI':
                                         if "StochRSI_K:" in indicator_text and "StochRSI_D:" in indicator_text:
                                             try:
-                                                stochrsi_k_val = float(indicator_text.split('StochRSI_K: ')[1].split('.')[0].replace(',', ''))
-                                                stochrsi_d_val = float(indicator_text.split('StochRSI_D: ')[1].split('.')[0].replace(',', ''))
+                                                # Extracting numerical values
+                                                stochrsi_k_str = indicator_text.split('StochRSI_K: ')[1].split('. ')[0].strip()
+                                                stochrsi_d_str = indicator_text.split('StochRSI_D: ')[1].split('. ')[0].strip()
+                                                stochrsi_k_val = float(re.sub(r'[^\d.]', '', stochrsi_k_str))
+                                                stochrsi_d_val = float(re.sub(r'[^\d.]', '', stochrsi_d_str))
                                                 
                                                 if stochrsi_k_val > 80: assessment = "Bearish" # Overbought
                                                 elif stochrsi_k_val < 20: assessment = "Bullish" # Oversold
@@ -301,6 +320,8 @@ async def on_message(message):
                                             except (ValueError, IndexError): pass
                                 
                                 analysis_results.append(f"{indicator_name}: {assessment}")
+                                if assessment == "Bullish": overall_sentiment_score += 1
+                                elif assessment == "Bearish": overall_sentiment_score -= 1
                             except requests.exceptions.RequestException as e:
                                 analysis_results.append(f"{indicator_name}: Data Missing (Error: {e})")
                                 print(f"Error fetching {indicator_name}: {e}")
@@ -308,36 +329,26 @@ async def on_message(message):
                                 analysis_results.append(f"{indicator_name}: Data Missing (Unexpected Error: {e})")
                                 print(f"Unexpected error fetching {indicator_name}: {e}")
 
-                        # Combine all collected and analyzed data into a single string for the LLM
-                        combined_analysis_context = "\n".join(analysis_results)
+                        # Determine overall sentiment based on score
+                        overall_sentiment = "Neutral"
+                        if overall_sentiment_score > 0: overall_sentiment = "Bullish"
+                        elif overall_sentiment_score < 0: overall_sentiment = "Bearish"
+                        elif len(analysis_results) == 0 or all("Data Missing" in res for res in analysis_results):
+                             overall_sentiment = "Undetermined" # If no valid data
+
+                        # Formulate final response based on overall sentiment
+                        if overall_sentiment == user_sentiment_input.capitalize():
+                            response_text_for_discord = f"Based on the available indicators, the overall sentiment for {symbol_for_analysis} is indeed **{overall_sentiment}**."
+                        else:
+                            response_text_for_discord = f"Based on the available indicators, the overall sentiment for {symbol_for_analysis} is **{overall_sentiment}**, which differs from your {user_sentiment_input} assessment."
                         
-                        # --- Truncate combined_analysis_context if too long ---
-                        MAX_LLM_CONTEXT_LENGTH = 500 # Characters - a conservative limit
-                        if len(combined_analysis_context) > MAX_LLM_CONTEXT_LENGTH:
-                            original_len = len(combined_analysis_context)
-                            combined_analysis_context = combined_analysis_context[:MAX_LLM_CONTEXT_LENGTH] + "\n... (analysis data truncated)"
-                            print(f"Combined analysis context truncated from {original_len} to {len(combined_analysis_context)} characters.")
+                        response_text_for_discord += "\n\nIndividual indicator assessments:\n" + "\n".join(analysis_results)
 
-                        # --- Log the context sent to LLM for debugging ---
-                        print(f"Context sent to LLM for final analysis:\n{combined_analysis_context}")
-
-                        # Add the combined tool output to chat history for the LLM to see
-                        chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": "get_market_data", "response": {"text": combined_analysis_context}}}]})
-                        
-                        # Add a system instruction to guide the LLM's analysis
-                        system_instruction = (
-                            "Based on the following technical indicator assessments for "
-                            f"{symbol_for_analysis}, summarize the overall sentiment (Bullish, Bearish, or Mixed). "
-                            "Present the assessment for each indicator clearly, then give a concise overall summary. "
-                            "Example: 'RSI: Bullish, MACD: Bearish. Overall: Mixed sentiment.'"
-                            "If data is missing for an indicator, state 'N/A' or 'Data Missing'."
-                        )
-                        chat_history.insert(0, {"role": "system", "parts": [{"text": system_instruction}]})
-
-
-                        # --- Final LLM Call: Generate analysis based on all collected data ---
-                        llm_payload_final_turn = {
-                            "contents": chat_history, # Updated chat history with all tool outputs
+                    else: # Original LLM tool call handling or direct text response
+                        # --- First LLM Call: Get LLM's initial response or tool call ---
+                        llm_payload_first_turn = {
+                            "contents": chat_history,
+                            "tools": tools,
                             "safetySettings": [
                                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
                                 {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -345,45 +356,91 @@ async def on_message(message):
                                 {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                             ]
                         }
+
                         try:
-                            llm_response_final_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_final_turn)
-                            llm_response_final_turn.raise_for_status()
-                            llm_data_final_turn = llm_response_final_turn.json()
+                            llm_response_first_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_first_turn)
+                            llm_response_first_turn.raise_for_status()
+                            llm_data_first_turn = llm_response_first_turn.json()
                         except requests.exceptions.RequestException as e:
-                            print(f"Error connecting to Gemini LLM (final turn after analysis data): {e}")
-                            response_text_for_discord = f"I collected the analysis data, but I'm having trouble generating a full analysis with my AI brain. Please try again later. Error: {e}"
+                            print(f"Error connecting to Gemini LLM (first turn): {e}")
+                            response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
                             await message.channel.send(response_text_for_discord)
-                            return # Exit early
+                            return # Exit early if LLM connection fails
 
-                        if llm_data_final_turn and llm_data_final_turn.get('candidates'):
-                            candidate_final_turn = llm_data_final_turn['candidates'][0]
-                            if candidate_final_turn.get('content') and candidate_final_turn['content'].get('parts'):
-                                response_text_for_discord = candidate_final_turn['content']['parts'][0].get('text', 'No analysis generated by AI.')
+                        if llm_data_first_turn and llm_data_first_turn.get('candidates'):
+                            candidate_first_turn = llm_data_first_turn['candidates'][0]
+                            if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
+                                parts_first_turn = candidate_first_turn['content']['parts']
+                                if parts_first_turn[0].get('functionCall'):
+                                    function_call = parts_first_turn[0]['functionCall']
+                                    function_name = function_call['name']
+                                    function_args = function_call['args']
+
+                                    if function_name == "get_market_data":
+                                        if FLASK_WEBHOOK_URL:
+                                            print(f"LLM requested tool call: get_market_data with args: {function_args}")
+                                            chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
+                                            try:
+                                                webhook_response = requests.get(FLASK_WEBHOOK_URL, params=function_args)
+                                                webhook_response.raise_for_status()
+                                                tool_output_data = webhook_response.json()
+                                                tool_output_text = tool_output_data.get('text', 'No specific response from market data agent.')
+                                                print(f"Tool execution output: {tool_output_text}")
+                                            except requests.exceptions.RequestException as e:
+                                                print(f"Error connecting to Flask Webhook: {e}")
+                                                response_text_for_discord = f"I'm having trouble connecting to my data service webhook. Please ensure the webhook URL is correct and the service is running. Error: {e}"
+                                                await message.channel.send(response_text_for_discord)
+                                                return
+                                            
+                                            chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
+
+                                            llm_payload_second_turn = {
+                                                "contents": chat_history,
+                                                "tools": tools,
+                                                "safetySettings": [
+                                                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                                                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                                                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                                                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                                                ]
+                                            }
+                                            try:
+                                                llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
+                                                llm_response_second_turn.raise_for_status()
+                                                llm_data_second_turn = llm_response_second_turn.json()
+                                            except requests.exceptions.RequestException as e:
+                                                print(f"Error connecting to Gemini LLM (second turn after tool): {e}")
+                                                response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
+                                                await message.channel.send(response_text_for_discord)
+                                                return
+
+                                            if llm_data_second_turn and llm_data_second_turn.get('candidates'):
+                                                candidate_second_turn = llm_data_second_turn['candidates'][0]
+                                                if candidate_second_turn.get('content') and candidate_second_turn['content'].get('parts'):
+                                                    response_text_for_discord = candidate_second_turn['content']['parts'][0].get('text', 'No conversational response from AI.')
+                                                else:
+                                                    response_text_for_discord = "AI did not provide a conversational response after tool execution."
+                                            else:
+                                                response_text_for_discord = "Could not get a valid second response from the AI."
+
+                                        else:
+                                            response_text_for_discord = "Error: Flask webhook URL is not configured."
+                                    else:
+                                        response_text_for_discord = "LLM requested an unknown function."
+
+                                elif parts_first_turn[0].get('text'):
+                                    response_text_for_discord = parts_first_turn[0]['text']
+                                else:
+                                    response_text_for_discord = "LLM response format not recognized in the first turn."
                             else:
-                                # LLM responded but no text content (e.g., safety block, empty response)
-                                print(f"LLM final turn: No text content in response. Full response: {llm_data_final_turn}")
-                                block_reason = llm_data_final_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
-                                response_text_for_discord = f"AI could not generate a full analysis. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing or a different symbol."
+                                response_text_for_discord = "LLM did not provide content in its first turn response."
                         else:
-                            # LLM response was empty or malformed
-                            print(f"LLM final turn: No candidates in response. Full response: {llm_data_final_turn}")
-                            response_text_for_discord = "Could not get a valid analysis from the AI. The response was empty or malformed. Please try again."
-
-                # --- If LLM generated a direct text response (no tool call needed and not an "analyze" command) ---
-                elif parts_first_turn[0].get('text'):
-                    response_text_for_discord = parts_first_turn[0]['text']
-                else:
-                    response_text_for_discord = "LLM response format not recognized in the first turn."
-            else:
-                response_text_for_discord = "LLM did not provide content in its first turn response."
-        else:
-            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-            if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
-                response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
+                            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
+                            if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
+                                response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
 
 
     except requests.exceptions.RequestException as e:
-        # This catch-all is for unexpected request errors outside of specific try blocks
         print(f"General Request Error: {e}")
         response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
     except Exception as e:
