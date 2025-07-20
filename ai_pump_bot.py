@@ -22,11 +22,11 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between Twelve Data calls)
+TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between Twelve Data calls)
 last_news_api_call = 0
-NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
+NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
 api_response_cache = {}
-CACHE_DURATION = 1 # Cache responses for 10 seconds
+CACHE_DURATION = 10 # Cache responses for 10 seconds
 
 # --- Conversation Memory (In-memory, volatile on bot restart) ---
 conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
@@ -211,53 +211,84 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
             if data.get('values') and len(data['values']) > 0:
                 latest_values = data['values'][0] # Get the most recent data point
+                print(f"DEBUG: {indicator_name_upper} - latest_values: {latest_values}") # Debugging print
 
                 if indicator_name_upper == 'RSI':
                     value = latest_values.get('rsi')
+                    print(f"DEBUG: RSI - raw value: {value}, type: {type(value)}") # Debugging print
                     if value is not None:
-                        indicator_value = float(str(value).replace(',', '')) # Ensure string before replace
-                        indicator_description = f"{indicator_period_str}-period Relative Strength Index"
+                        try:
+                            indicator_value = float(str(value).replace(',', '')) # Ensure string before replace
+                            indicator_description = f"{indicator_period_str}-period Relative Strength Index"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during RSI float conversion: {ve} for value: '{value}'")
+                            indicator_value = None # Ensure it's None if conversion fails
                 elif indicator_name_upper == 'MACD':
                     macd = latest_values.get('macd')
                     signal = latest_values.get('signal')
                     histogram = latest_values.get('histogram')
+                    print(f"DEBUG: MACD - raw macd: {macd}, signal: {signal}, histogram: {histogram}") # Debugging print
                     if all(v is not None for v in [macd, signal, histogram]):
-                        indicator_value = {
-                            'MACD_Line': float(str(macd).replace(',', '')),
-                            'Signal_Line': float(str(signal).replace(',', '')),
-                            'Histogram': float(str(histogram).replace(',', ''))
-                        }
-                        indicator_description = "Moving Average Convergence D-I-vergence"
+                        try:
+                            indicator_value = {
+                                'MACD_Line': float(str(macd).replace(',', '')),
+                                'Signal_Line': float(str(signal).replace(',', '')),
+                                'Histogram': float(str(histogram).replace(',', ''))
+                            }
+                            indicator_description = "Moving Average Convergence D-I-vergence"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during MACD float conversion: {ve}")
+                            indicator_value = None
                 elif indicator_name_upper == 'BBANDS':
                     upper = latest_values.get('upper')
                     middle = latest_values.get('middle')
                     lower = latest_values.get('lower')
+                    print(f"DEBUG: BBANDS - raw upper: {upper}, middle: {middle}, lower: {lower}") # Debugging print
                     if all(v is not None for v in [upper, middle, lower]):
-                        indicator_value = {
-                            'Upper_Band': float(str(upper).replace(',', '')),
-                            'Middle_Band': float(str(middle).replace(',', '')),
-                            'Lower_Band': float(str(lower).replace(',', ''))
-                        }
-                        indicator_description = f"{indicator_period_str}-period Bollinger Bands"
+                        try:
+                            indicator_value = {
+                                'Upper_Band': float(str(upper).replace(',', '')),
+                                'Middle_Band': float(str(middle).replace(',', '')),
+                                'Lower_Band': float(str(lower).replace(',', ''))
+                            }
+                            indicator_description = f"{indicator_period_str}-period Bollinger Bands"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during BBANDS float conversion: {ve}")
+                            indicator_value = None
                 elif indicator_name_upper == 'STOCHRSI':
                     stochrsi_k = latest_values.get('stochrsi')
                     stochrsi_d = latest_values.get('stochrsi_signal')
+                    print(f"DEBUG: STOCHRSI - raw K: {stochrsi_k}, D: {stochrsi_d}") # Debugging print
                     if all(v is not None for v in [stochrsi_k, stochrsi_d]):
-                        indicator_value = {
-                            'StochRSI_K': float(str(stochrsi_k).replace(',', '')),
-                            'StochRSI_D': float(str(stochrsi_d).replace(',', ''))
-                        }
-                        indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
+                        try:
+                            indicator_value = {
+                                'StochRSI_K': float(str(stochrsi_k).replace(',', '')),
+                                'StochRSI_D': float(str(stochrsi_d).replace(',', ''))
+                            }
+                            indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during STOCHRSI float conversion: {ve}")
+                            indicator_value = None
                 elif indicator_name_upper == 'SMA':
                     value = latest_values.get('value')
+                    print(f"DEBUG: SMA - raw value: {value}") # Debugging print
                     if value is not None:
-                        indicator_value = float(str(value).replace(',', ''))
-                        indicator_description = f"{indicator_period_str}-period Simple Moving Average"
+                        try:
+                            indicator_value = float(str(value).replace(',', ''))
+                            indicator_description = f"{indicator_period_str}-period Simple Moving Average"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during SMA float conversion: {ve}")
+                            indicator_value = None
                 elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Assuming MA is EMA
                     value = latest_values.get('value')
+                    print(f"DEBUG: EMA - raw value: {value}") # Debugging print
                     if value is not None:
-                        indicator_value = float(str(value).replace(',', ''))
-                        indicator_description = f"{indicator_period_str}-period Exponential Moving Average"
+                        try:
+                            indicator_value = float(str(value).replace(',', ''))
+                            indicator_description = f"{indicator_period_str}-period Exponential Moving Average"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during EMA float conversion: {ve}")
+                            indicator_value = None
 
             if indicator_value is not None:
                 if isinstance(indicator_value, dict):
@@ -268,7 +299,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 else:
                     response_data = {"text": f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."}
             else:
-                raise ValueError(f"Twelve Data did not return valid indicator values for {indicator_name_upper} for {symbol}. Response: {data}")
+                raise ValueError(f"Twelve Data did not return valid indicator values for {indicator_name_upper} for {symbol}. Raw latest_values: {latest_values}")
 
         elif data_type == 'news':
             # --- Rate Limiting for NewsAPI.org ---
@@ -397,7 +428,9 @@ async def on_message(message):
         except requests.exceptions.RequestException as e:
             print(f"Error connecting to Gemini LLM (first turn): {e}")
             response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
-            await message.channel.send(response_text_for_discord)
+            # Ensure response is sent even on LLM connection error
+            for chunk in split_message(response_text_for_discord):
+                await message.channel.send(chunk)
             return
 
         if llm_data_first_turn and llm_data_first_turn.get('candidates'):
@@ -405,96 +438,93 @@ async def on_message(message):
             # Ensure content and parts exist before accessing
             if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
                 parts_first_turn = candidate_first_turn['content']['parts']
+                if parts_first_turn: # Check if parts list is not empty
+                    if parts_first_turn[0].get('functionCall'):
+                        function_call = parts_first_turn[0]['functionCall']
+                        function_name = function_call['name']
+                        function_args = function_call['args']
 
-                if parts_first_turn[0].get('functionCall'):
-                    function_call = parts_first_turn[0]['functionCall']
-                    function_name = function_call['name']
-                    function_args = function_call['args']
+                        if function_name == "get_market_data":
+                            print(f"LLM requested tool call: get_market_data with args: {function_args}")
+                            current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
 
-                    if function_name == "get_market_data":
-                        print(f"LLM requested tool call: get_market_data with args: {function_args}")
-                        current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
+                            # --- Pre-populate missing args with defaults before calling helper ---
+                            if 'interval' not in function_args:
+                                function_args['interval'] = '1day'
+                            if 'indicator_period' not in function_args:
+                                if function_args.get('indicator', '').upper() == 'MACD':
+                                    function_args['indicator_period'] = '0'
+                                else:
+                                    function_args['indicator_period'] = '14'
+                            
+                            for key, value in function_args.items():
+                                function_args[key] = str(value)
 
-                        # --- Pre-populate missing args with defaults before calling helper ---
-                        # These are defaults for the LLM's functionCall, not _fetch_data_from_twelve_data's defaults
-                        if 'interval' not in function_args:
-                            function_args['interval'] = '1day'
-                        if 'indicator_period' not in function_args:
-                            # Default indicator_period based on indicator type if not provided by LLM
-                            if function_args.get('indicator', '').upper() == 'MACD':
-                                function_args['indicator_period'] = '0' # MACD uses fixed periods
+
+                            try:
+                                tool_output_data = await _fetch_data_from_twelve_data(**function_args)
+                                tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
+                                print(f"Tool execution output: {tool_output_text}")
+                            except requests.exceptions.RequestException as e:
+                                print(f"Error fetching data from Twelve Data via local helper: {e}")
+                                tool_output_text = f"Error fetching data: {e}"
+                            except ValueError as e:
+                                print(f"Invalid parameters for data fetch: {e}")
+                                tool_output_text = f"Invalid parameters: {e}"
+                            except Exception as e:
+                                print(f"Unexpected error during data fetch: {e}")
+                                tool_output_text = f"An unexpected error occurred: {e}"
+                            
+                            current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
+
+                            llm_payload_second_turn = {
+                                "contents": current_chat_history,
+                                "tools": tools,
+                                "safetySettings": [
+                                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                                ]
+                            }
+                            try:
+                                llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
+                                llm_response_second_turn.raise_for_status()
+                                llm_data_second_turn = llm_response_second_turn.json()
+                            except requests.exceptions.RequestException as e:
+                                print(f"Error connecting to Gemini LLM (second turn after tool): {e}")
+                                response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
+                                # Ensure response is sent even on LLM connection error
+                                for chunk in split_message(response_text_for_discord):
+                                    await message.channel.send(chunk)
+                                return
+
+                            if llm_data_second_turn and llm_data_second_turn.get('candidates'):
+                                final_candidate = llm_data_second_turn['candidates'][0]
+                                if final_candidate.get('content') and final_candidate['content'].get('parts'):
+                                    response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
+                                else:
+                                    print(f"LLM second turn: No text content in response. Full response: {llm_data_second_turn}")
+                                    block_reason = llm_data_second_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
+                                    response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
                             else:
-                                function_args['indicator_period'] = '14' # Common default for others (RSI, BBANDS, STOCHRSI)
-                        
-                        # Ensure all args are strings for _fetch_data_from_twelve_data
-                        for key, value in function_args.items():
-                            function_args[key] = str(value)
-
-
-                        try:
-                            tool_output_data = await _fetch_data_from_twelve_data(**function_args)
-                            tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
-                            print(f"Tool execution output: {tool_output_text}")
-                        except requests.exceptions.RequestException as e:
-                            print(f"Error fetching data from Twelve Data via local helper: {e}")
-                            tool_output_text = f"Error fetching data: {e}"
-                        except ValueError as e:
-                            print(f"Invalid parameters for data fetch: {e}")
-                            tool_output_text = f"Invalid parameters: {e}"
-                        except Exception as e:
-                            print(f"Unexpected error during data fetch: {e}")
-                            tool_output_text = f"An unexpected error occurred: {e}"
-                        
-                        current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
-
-                        llm_payload_second_turn = {
-                            "contents": current_chat_history,
-                            "tools": tools,
-                            "safetySettings": [
-                                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                            ]
-                        }
-                        try:
-                            llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
-                            llm_response_second_turn.raise_for_status()
-                            llm_data_second_turn = llm_response_second_turn.json()
-                        except requests.exceptions.RequestException as e:
-                            print(f"Error connecting to Gemini LLM (second turn after tool): {e}")
-                            response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
-                            await message.channel.send(response_text_for_discord)
-                            return
-
-                        if llm_data_second_turn and llm_data_second_turn.get('candidates'):
-                            final_candidate = llm_data_second_turn['candidates'][0]
-                            if final_candidate.get('content') and final_candidate['content'].get('parts'):
-                                response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
-                            else:
-                                # LLM responded but no text content (e.g., safety block, empty response)
-                                print(f"LLM second turn: No text content in response. Full response: {llm_data_second_turn}")
-                                block_reason = llm_data_second_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
-                                response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
+                                response_text_for_discord = "Could not get a valid second response from the AI."
                         else:
-                            response_text_for_discord = "Could not get a valid second response from the AI."
+                            response_text_for_discord = "LLM requested an unknown function."
+                    elif parts_first_turn[0].get('text'):
+                        response_text_for_discord = parts_first_turn[0]['text']
                     else:
-                        response_text_for_discord = "LLM requested an unknown function."
-                elif parts_first_turn[0].get('text'):
-                    response_text_for_discord = parts_first_turn[0]['text']
+                        print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
+                        block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
+                        response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
                 else:
-                    # LLM responded but no text content (e.g., safety block, empty response)
-                    print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
-                    block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
-                    response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
+                    response_text_for_discord = "LLM did not provide content in its response."
             else:
-                response_text_for_discord = "LLM did not provide content in its response."
-        else:
-            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-            if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
-                response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
-        
-        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+                response_text_for_discord = "Could not get a valid response from the AI. Please try again."
+                if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
+                    response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
+            
+            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
 
 
     except requests.exceptions.RequestException as e:
