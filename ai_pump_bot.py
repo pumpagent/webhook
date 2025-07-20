@@ -20,6 +20,7 @@ client = discord.Client(intents=intents)
 # --- Conversation Memory (In-memory, volatile on bot restart) ---
 # Stores chat history for each user/channel
 conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
+MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memory for LLM context
 
 @client.event
 async def on_ready():
@@ -44,8 +45,9 @@ async def on_message(message):
     # Add current user query to history
     conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
     
-    # Use the current chat history for the LLM interaction
-    current_chat_history = conversation_histories[user_id]
+    # Limit conversation history to MAX_CONVERSATION_TURNS for LLM context
+    # This ensures the LLM doesn't receive an overly long prompt
+    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
 
     response_text_for_discord = "I'm currently unavailable. Please try again later."
 
