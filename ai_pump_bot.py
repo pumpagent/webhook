@@ -35,6 +35,33 @@ MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memo
 # Discord message character limit
 DISCORD_MESSAGE_MAX_LENGTH = 2000
 
+def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
+    """Splits a message into chunks that fit Discord's character limit."""
+    if len(message_content) <= max_length:
+        return [message_content]
+    
+    chunks = []
+    while len(message_content) > 0:
+        if len(message_content) <= max_length:
+            chunks.append(message_content)
+            break
+        
+        # Try to find a natural break point (e.g., last newline or sentence end)
+        split_point = message_content[:max_length].rfind('\n')
+        if split_point == -1:
+            split_point = message_content[:max_length].rfind('. ')
+        if split_point == -1:
+            split_point = message_content[:max_length].rfind(' ')
+        
+        if split_point == -1 or split_point == 0: # No natural break, force split
+            split_point = max_length
+        
+        chunks.append(message_content[:split_point])
+        message_content = message_content[split_point:].lstrip() # Remove leading whitespace
+
+    return chunks
+
+
 async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, outputsize=None,
                                        indicator=None, indicator_period=None, news_query=None,
                                        from_date=None, sort_by=None, news_language=None):
@@ -159,6 +186,12 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 params['fast_d_period'] = 3
                 params['rsi_time_period'] = indicator_period_str
                 params['stoch_time_period'] = indicator_period_str
+            elif indicator_name_upper == 'SMA':
+                indicator_endpoint = "sma"
+                params['time_period'] = indicator_period_str
+            elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Treat MA as EMA
+                indicator_endpoint = "ema"
+                params['time_period'] = indicator_period_str
             else:
                 raise ValueError(f"Indicator '{indicator}' not supported by direct API.")
 
@@ -215,6 +248,16 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                             'StochRSI_D': float(str(stochrsi_d).replace(',', ''))
                         }
                         indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
+                elif indicator_name_upper == 'SMA':
+                    value = latest_values.get('value')
+                    if value is not None:
+                        indicator_value = float(str(value).replace(',', ''))
+                        indicator_description = f"{indicator_period_str}-period Simple Moving Average"
+                elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Assuming MA is EMA
+                    value = latest_values.get('value')
+                    if value is not None:
+                        indicator_value = float(str(value).replace(',', ''))
+                        indicator_description = f"{indicator_period_str}-period Exponential Moving Average"
 
             if indicator_value is not None:
                 if isinstance(indicator_value, dict):
@@ -251,7 +294,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 f"apiKey={NEWS_API_KEY}" # Use NEWS_API_KEY directly
             )
             print(f"Fetching news for '{news_query}' from NewsAPI.org...")
-            response = requests.get(news_api_url)
+            response = requests.get(api_url)
             response.raise_for_status()
             news_data = response.json()
 
@@ -461,7 +504,9 @@ async def on_message(message):
         print(f"An unexpected error occurred in bot logic: {e}")
         response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
 
-    await message.channel.send(response_text_for_discord)
+    # Split and send the response to Discord
+    for chunk in split_message(response_text_for_discord):
+        await message.channel.send(chunk)
 
 if __name__ == '__main__':
     if not DISCORD_BOT_TOKEN:
