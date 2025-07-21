@@ -30,7 +30,7 @@ CACHE_DURATION = 10 # Cache responses for 10 seconds
 
 # --- Conversation Memory (In-memory, volatile on bot restart) ---
 conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
-MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memory for LLM context
+MAX_CONVERSATION_TURNS = 20 # Keep last 20 turns (user + model/function) in memory for LLM context
 
 # --- AUTHORIZED USERS (Add your Discord User IDs here) ---
 # Messages from users NOT in this list will be ignored.
@@ -285,7 +285,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                         except ValueError as ve:
                             print(f"DEBUG: ValueError during SMA float conversion: {ve}")
                             indicator_value = None
-                elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Assuming MA is EMA
+                elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Treat MA as EMA
                     value = latest_values.get('value')
                     print(f"DEBUG: EMA - raw value: {value}") # Debugging print
                     if value is not None:
