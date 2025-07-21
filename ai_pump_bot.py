@@ -30,7 +30,7 @@ CACHE_DURATION = 10 # Cache responses for 10 seconds
 
 # --- Conversation Memory (In-memory, volatile on bot restart) ---
 conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
-MAX_CONVERSATION_TURNS = 20 # Keep last 20 turns (user + model/function) in memory for LLM context
+MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memory for LLM context
 
 # --- AUTHORIZED USERS (Add your Discord User IDs here) ---
 # Messages from users NOT in this list will be ignored.
@@ -511,7 +511,13 @@ async def on_message(message):
                 "functionDeclarations": [
                     {
                         "name": "get_market_data",
-                        "description": "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query.",
+                        "description": (
+                            "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query. "
+                            "If the user asks for a general outlook, sentiment, or bullish/bearish assessment for a symbol (e.g., 'Is BTC bullish?', 'Outlook for ETH?', 'Sentiment for SOL?'), "
+                            "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter**. "
+                            "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD). "
+                            "If the user asks for a price prediction or price target, use `data_type='indicator'` and the symbol."
+                        ),
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -519,7 +525,7 @@ async def on_message(message):
                                 "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch (live, historical, indicator, news). This is required." },
                                 "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
                                 "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
-                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"], "description": "Name of the technical indicator. Required if data_type is 'indicator'." },
+                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"], "description": "Name of the technical indicator. Required if data_type is 'indicator' AND a specific indicator is requested by the user." },
                                 "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD." },
                                 "news_query": { "type": "string", "description": "Keywords for news search." },
                                 "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
@@ -618,6 +624,14 @@ async def on_message(message):
                                     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                                 ]
                             }
+                            # --- NEW: System instruction for final response (including disclaimer) ---
+                            llm_payload_second_turn["contents"].insert(0, {"role": "system", "parts": [{"text": (
+                                "You are a technical analysis bot named Pump. "
+                                "Always start your response with: 'Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.' "
+                                "Then, based on the provided data or tool output, provide a concise and direct answer to the user's query. "
+                                "If the tool output is a comprehensive sentiment analysis, present the overall outlook (Pump, Dump, Neutral, or Undetermined) and then the individual indicator assessments. "
+                                "Do not ask follow-up questions unless absolutely necessary due to missing critical information."
+                            )}])
                             try:
                                 llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
                                 llm_response_second_turn.raise_for_status()
