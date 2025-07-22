@@ -624,14 +624,16 @@ async def on_message(message):
                                     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                                 ]
                             }
-                            # --- NEW: System instruction for final response (including disclaimer) ---
-                            llm_payload_second_turn["contents"].insert(0, {"role": "system", "parts": [{"text": (
+                            # --- CORRECTED: System instruction for final response (including disclaimer) ---
+                            system_instruction_text = (
                                 "You are a technical analysis bot named Pump. "
                                 "Always start your response with: 'Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.' "
                                 "Then, based on the provided data or tool output, provide a concise and direct answer to the user's query. "
                                 "If the tool output is a comprehensive sentiment analysis, present the overall outlook (Pump, Dump, Neutral, or Undetermined) and then the individual indicator assessments. "
                                 "Do not ask follow-up questions unless absolutely necessary due to missing critical information."
-                            )}])
+                            )
+                            llm_payload_second_turn["contents"].insert(0, {"role": "system", "parts": [{"text": system_instruction_text}]})
+
                             try:
                                 llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
                                 llm_response_second_turn.raise_for_status()
