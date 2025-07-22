@@ -26,7 +26,7 @@ TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
 NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
 api_response_cache = {}
-CACHE_DURATION = 1 # Cache responses for 10 seconds
+CACHE_DURATION = 10 # Cache responses for 10 seconds
 
 # --- Conversation Memory (In-memory, volatile on bot restart) ---
 conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
@@ -426,4 +426,90 @@ async def _perform_sentiment_analysis(symbol, interval_str):
                             macd_line_val = float(re.sub(r'[^\d.-]', '', indicator_text.split('MACD_Line: ')[1].split('. ')[0].strip()))
                             signal_line_val = float(re.sub(r'[^\d.-]', '', indicator_text.split('Signal_Line: ')[1].split('. ')[0].strip()))
                             if macd_line_val > signal_line_val: assessment = "Bullish"
-                            elif macd_line_val < sig
+                            elif macd_line_val < signal_line_val: assessment = "Bearish"
+                        except (ValueError, IndexError): pass
+                elif indicator_name == 'BBANDS' and current_price_val is not None:
+                    if "Upper_Band:" in indicator_text and "Lower_Band:" in indicator_text:
+                        try:
+                            upper_band = float(re.sub(r'[^\d.]', '', indicator_text.split('Upper_Band: ')[1].split('. ')[0].strip()))
+                            lower_band = float(re.sub(r'[^\d.]', '', indicator_text.split('Lower_Band: ')[1].split('. ')[0].strip()))
+                            if current_price_val > upper_band: assessment = "Bearish" # Price above upper band
+                            elif current_price_val < lower_band: assessment = "Bullish" # Price below lower band
+                            else: assessment = "Neutral" # Price within bands
+                        except (ValueError, IndexError): pass
+                elif indicator_name == 'STOCHRSI':
+                    if "StochRSI_K:" in indicator_text and "StochRSI_D:" in indicator_text:
+                        try:
+                            stochrsi_k_val = float(re.sub(r'[^\d.]', '', indicator_text.split('StochRSI_K: ')[1].split('. ')[0].strip()))
+                            stochrsi_d_val = float(re.sub(r'[^\d.]', '', indicator_text.split('StochRSI_D: ')[1].split('. ')[0].strip()))
+                            if stochrsi_k_val > 80: assessment = "Bearish" # Overbought
+                            elif stochrsi_k_val < 20: assessment = "Bullish" # Oversold
+                            elif stochrsi_k_val > stochrsi_d_val: assessment = "Bullish" # K crossing above D
+                            elif stochrsi_k_val < stochrsi_d_val: assessment = "Bearish" # K crossing below D
+                        except (ValueError, IndexError): pass
+                elif indicator_name == 'SMA' or indicator_name == 'EMA':
+                    try:
+                        val_str = indicator_text.split(' is ')[-1].strip()
+                        val = float(re.sub(r'[^\d.]', '', val_str))
+                        # For SMA/EMA, compare to current price to determine bullish/bearish
+                        if current_price_val is not None:
+                            if current_price_val > val: assessment = "Bullish" # Price above MA
+                            elif current_price_val < val: assessment = "Bearish" # Price below MA
+                        else:
+                            assessment = "Neutral (Live Price Missing)"
+                    except ValueError: pass
+            
+            analysis_results.append(f"{indicator_name}: {assessment}")
+            if assessment == "Bullish": overall_sentiment_score += 1
+            elif assessment == "Bearish": overall_sentiment_score -= 1
+        except Exception as e:
+            analysis_results.append(f"{indicator_name}: Data Missing (Error: {e})")
+            print(f"Error fetching/parsing {indicator_name}: {e}")
+
+    # Determine overall sentiment based on score
+    overall_sentiment = "Neutral"
+    if overall_sentiment_score > 0: overall_sentiment = "Pump"
+    elif overall_sentiment_score < 0: overall_sentiment = "Dump"
+    
+    if len(analysis_results) == 0 or all("Data Missing" in res for res in analysis_results):
+        overall_sentiment = "Undetermined"
+
+    # Formulate final response
+    combined_analysis_text = f"Overall Outlook for {symbol} ({interval_str}): **{overall_sentiment}**\n\n"
+    combined_analysis_text += "Individual Indicator Assessments:\n" + "\n".join(analysis_results)
+    
+    return combined_analysis_text
+
+
+@client.event
+async def on_message(message):
+    """Event that fires when a message is sent in a channel the bot can see."""
+    if message.author == client.user:
+        return
+
+    user_id = str(message.author.id)
+    # --- NEW: Check if user is authorized ---
+    if AUTHORIZED_USER_IDS and str(user_id) not in AUTHORIZED_USER_IDS:
+        print(f"Ignoring message from unauthorized user: {user_id}")
+        return # Ignore message if user is not authorized
+
+    user_query = message.content.strip()
+    print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
+
+    if user_id not in conversation_histories:
+        conversation_histories[user_id] = []
+    
+    conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
+    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+
+    response_text_for_discord = "I'm currently unavailable. Please try again later."
+
+    try:
+        # --- Define the market_data tool for the LLM ---
+        tools = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "get_market_data",
+                        "description": (
+                            "Fetches live price, historical data, or technical analysis indicators for a gi
