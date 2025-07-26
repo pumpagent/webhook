@@ -671,7 +671,7 @@ async def on_message(message):
                                     tool_output_data = await _fetch_data_from_twelve_data(**function_args)
                                     tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
                                     print(f"Tool execution output: {tool_output_text}")
-                                except requests.exceptions.RequestError as e:
+                                except requests.exceptions.RequestException as e:
                                     print(f"Error fetching data from data service via local helper: {e}")
                                     tool_output_text = f"Error fetching data: {e}"
                                 except ValueError as e:
