@@ -22,9 +22,9 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between API calls)
+TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
-NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
+NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
 api_response_cache = {}
 CACHE_DURATION = 10 # Cache responses for 10 seconds
 
@@ -380,7 +380,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             news_data = response.json()
 
             if news_data.get('status') == 'error':
-                error_message = news_data.get('message', 'Unknown error from News API.')
+                error_message = data.get('message', 'Unknown error from News API.')
                 raise requests.exceptions.RequestException(f"News API error: {error_message}")
             
             articles = news_data.get('articles')
@@ -700,7 +700,7 @@ async def on_message(message):
                                 "Always start your response with: 'Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.' "
                                 "Then, based on the provided data or tool output, provide a concise and direct answer to the user's query. "
                                 "If the tool output is a comprehensive sentiment analysis, present the overall outlook (Pump, Dump, Neutral, or Undetermined) and then the individual indicator assessments. "
-                                "Do not ask follow-up questions unless absolutely necessary due to missing critical information."
+                                "Do not add follow-up questions unless absolutely necessary due to missing critical information."
                             )
                             llm_payload_second_turn["contents"].insert(0, {"role": "system", "parts": [{"text": system_instruction_text}]})
 
