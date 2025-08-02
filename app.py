@@ -1,183 +1,357 @@
-
+import os
 import discord
 import requests
-import json # Import json for parsing LLM tool calls
+import json
+import re # Import regex for parsing indicator values
+import time # For rate limiting
+from datetime import datetime, timedelta # Import for date handling
 
 # --- API Keys and URLs (Set as Environment Variables on Render) ---
-# Discord Bot Token (from Discord Developer Portal)
 DISCORD_BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
-# Your Flask Webhook URL (e.g., https://pricelookupwebhook.onrender.com/market_data)
-FLASK_WEBHOOK_URL = os.environ.get('FLASK_WEBHOOK_URL')
-# Google API Key for Gemini (ensure this is set for LLM calls)
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-
+TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY') # Directly used by the bot
+NEWS_API_KEY = os.environ.get('NEWS_API_KEY') # Directly used by the bot
 
 # --- Discord Bot Setup ---
-# Define Discord intents (crucial for message content)
 intents = discord.Intents.default()
-intents.message_content = True # Enable message content intent
-intents.members = True       # Enable server members intent (if needed for user info)
-intents.presences = True     # Enable presence intent (if needed)
+intents.message_content = True
+intents.members = True
+intents.presences = True
 
 client = discord.Client(intents=intents)
 
-@client.event
-async def on_ready():
-    """Event that fires when the bot successfully connects to Discord."""
-    print(f'Logged in as {client.user} (ID: {client.user.id})')
-    print('------')
+# --- Rate Limiting & Caching Configuration ---
+last_twelve_data_call = 0
+TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between API calls)
+last_news_api_call = 0
+NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
+api_response_cache = {}
+CACHE_DURATION = 10 # Cache responses for 10 seconds
 
-@client.event
-async def on_message(message):
-    """Event that fires when a message is sent in a channel the bot can see."""
-    # Ignore messages from the bot itself to prevent infinite loops
-    if message.author == client.user:
-        return
+# --- Conversation Memory (In-memory, volatile on bot restart) ---
+conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
+MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memory for LLM context
 
-    user_query = message.content.strip()
-    print(f"Received message: '{user_query}' from {message.author}")
+# --- AUTHORIZED USERS (Add your Discord User IDs here) ---
+# Messages from users NOT in this list will be ignored.
+# You can get your Discord User ID by enabling Developer Mode (User Settings -> Advanced)
+# then right-clicking your username and selecting "Copy ID".
+AUTHORIZED_USER_IDS = ["918556208217067561", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
 
-    # Initialize chat history for the LLM
-    chat_history = []
-    chat_history.append({"role": "user", "parts": [{"text": user_query}]})
+# Discord message character limit
+DISCORD_MESSAGE_MAX_LENGTH = 2000
 
-    response_text_for_discord = "I'm currently unavailable. Please try again later."
+def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
+    """Splits a message into chunks that fit Discord's character limit."""
+    if len(message_content) <= max_length:
+        return [message_content]
+    
+    chunks = []
+    while len(message_content) > 0:
+        if len(message_content) <= max_length:
+            chunks.append(message_content)
+            break
+        
+        # Try to find a natural break point (e.g., last newline or sentence end)
+        split_point = message_content[:max_length].rfind('\n')
+        if split_point == -1:
+            split_point = message_content[:max_length].rfind('. ')
+        if split_point == -1:
+            split_point = message_content[:max_length].rfind(' ')
+        
+        if split_point == -1 or split_point == 0: # No natural break, force split
+            split_point = max_length
+        
+        chunks.append(message_content[:split_point])
+        message_content = message_content[split_point:].lstrip() # Remove leading whitespace
+
+    return chunks
+
+
+async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, outputsize=None,
+                                       indicator=None, indicator_period=None, news_query=None,
+                                       from_date=None, sort_by=None, news_language=None):
+    """
+    Helper function to fetch data directly from Twelve Data API or NewsAPI.org.
+    Includes rate limiting and caching.
+    """
+    global last_twelve_data_call, last_news_api_call
+
+    cache_key = (data_type, symbol, interval, outputsize, indicator, indicator_period,
+                 news_query, from_date, sort_by, news_language)
+    current_time = time.time()
+
+    # --- Check Cache First ---
+    if cache_key in api_response_cache:
+        cached_data = api_response_cache[cache_key]
+        if (current_time - cached_data['timestamp']) < CACHE_DURATION:
+            print(f"Serving cached response for {data_type} request to data service.")
+            return cached_data['response_json']
+
+    # --- Rate Limiting ---
+    if data_type != 'news':
+        if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
+            time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
+            raise requests.exceptions.RequestException(
+                f"Rate limit hit for data service. Please wait {time_to_wait:.2f} seconds."
+            )
+    else: # data_type == 'news'
+        if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
+            time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
+            raise requests.exceptions.RequestException(
+                f"Rate limit hit for News API. Please wait {int(time_to_wait) + 1} seconds."
+            )
+
+
+    readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() if symbol else "N/A"
+    response_data = {} # To store the final JSON response
 
     try:
-        # --- Define the market_data tool for the LLM ---
-        # This tells the LLM about your Flask webhook and its parameters
-        tools = [
-            {
-                "functionDeclarations": [
-                    {
-                        "name": "get_market_data",
-                        "description": "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "symbol": {
-                                    "type": "string",
-                                    "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL') for price/TA. Required for 'live', 'historical', 'indicator' data types."
-                                },
-                                "data_type": {
-                                    "type": "string",
-                                    "enum": ["live", "historical", "indicator", "news"],
-                                    "description": "Type of data to fetch: 'live', 'historical', 'indicator', or 'news'. Defaults to 'live'."
-                                },
-                                "interval": {
-                                    "type": "string",
-                                    "description": "Time interval (e.g., '1min', '1day'). Required for 'historical' or 'indicator' data. Defaults to '1day'."
-                                },
-                                "outputsize": {
-                                    "type": "string",
-                                    "description": "Number of data points to retrieve. Defaults to '50' for historical, adjusted for indicator. Should be a whole number string."
-                                },
-                                "indicator": {
-                                    "type": "string",
-                                    "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"],
-                                    "description": "Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS', 'STOCHRSI'). Required if 'data_type' is 'indicator'."
-                                },
-                                "indicator_period": {
-                                    "type": "string",
-                                    "description": "Period for the indicator (e.g., '14', '20', '50'). Required if 'indicator' is specified. Should be a whole number string."
-                                },
-                                "news_query": {
-                                    "type": "string",
-                                    "description": "Keywords for news search. Required if 'data_type' is 'news'."
-                                },
-                                "from_date": {
-                                    "type": "string",
-                                    "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago."
-                                },
-                                "sort_by": {
-                                    "type": "string",
-                                    "enum": ["relevancy", "popularity", "publishedAt"],
-                                    "description": "How to sort news ('relevancy', 'popularity', 'publishedAt'). Defaults to 'publishedAt'."
-                                },
-                                "news_language": {
-                                    "type": "string",
-                                    "description": "Language of news (e.g., 'en'). Defaults to 'en'."
-                                }
-                            },
-                            "required": [] # LLM will infer required based on data_type
-                        }
-                    }
-                ]
-            }
-        ]
+        if data_type == 'live':
+            if not symbol:
+                raise ValueError("Missing 'symbol' parameter for live price.")
+            api_url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_API_KEY}"
+            print(f"Fetching live price for {symbol} from data service...")
+            response = requests.get(api_url)
+            response.raise_for_status()
+            data = response.json()
 
-        # Make a request to the Gemini LLM with tool definitions
-        llm_payload = {
-            "contents": chat_history,
-            "tools": tools,
-            "safetySettings": [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            ]
-        }
-
-        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
-        llm_response = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload)
-        llm_response.raise_for_status()
-        llm_data = llm_response.json()
-
-        # Check for LLM candidates and content
-        if llm_data and llm_data.get('candidates'):
-            candidate = llm_data['candidates'][0]
-            if candidate.get('content') and candidate['content'].get('parts'):
-                parts = candidate['content']['parts']
-
-                # --- Handle LLM's response (text or tool_calls) ---
-                if parts[0].get('functionCall'):
-                    function_call = parts[0]['functionCall']
-                    function_name = function_call['name']
-                    function_args = function_call['args']
-
-                    if function_name == "get_market_data":
-                        if FLASK_WEBHOOK_URL:
-                            print(f"LLM requested tool call: get_market_data with args: {function_args}")
-                            # Make the request to your Flask webhook
-                            webhook_response = requests.get(FLASK_WEBHOOK_URL, params=function_args)
-                            webhook_response.raise_for_status()
-                            data = webhook_response.json()
-                            response_text_for_discord = data.get('text', 'No specific response from market data agent.')
-                        else:
-                            response_text_for_discord = "Error: Flask webhook URL is not configured."
-                    else:
-                        response_text_for_discord = "LLM requested an unknown function."
-
-                elif parts[0].get('text'):
-                    # LLM generated a direct text response
-                    response_text_for_discord = parts[0]['text']
-                else:
-                    response_text_for_discord = "LLM response format not recognized."
+            if data.get('status') == 'error':
+                error_message = data.get('message', 'Unknown error from data service.')
+                raise requests.exceptions.RequestException(f"Data service error for symbol {symbol}: {error_message}")
+            
+            current_price = data.get('close')
+            if current_price is not None:
+                formatted_price = f"${float(current_price):,.2f}"
+                response_data = {"text": f"The current price of {readable_symbol} is {formatted_price}."}
             else:
-                response_text_for_discord = "LLM did not provide content in its response."
-        else:
-            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-            if llm_data.get('promptFeedback') and llm_data['promptFeedback'].get('blockReason'):
-                response_text_for_discord += f" (Blocked: {llm_data['promptFeedback']['blockReason']})"
+                raise ValueError(f"Data service did not return a 'close' price for {symbol}. Response: {data}")
 
+        elif data_type == 'historical':
+            if not symbol:
+                raise ValueError("Missing 'symbol' parameter for historical data.")
+            
+            interval_str = interval if interval else '1day'
+            outputsize_str = outputsize if outputsize else '50'
+            
+            api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval_str}&outputsize={outputsize_str}&apikey={TWELVE_DATA_API_KEY}"
+            print(f"Fetching data for {symbol} (interval: {interval_str}, outputsize: {outputsize_str}) from data service...")
+            response = requests.get(api_url)
+            response.raise_for_status()
+            data = response.json()
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error connecting to LLM or Flask webhook: {e}")
-        response_text_for_discord = "I'm having trouble connecting to my AI brain or data service. Please try again later."
-    except Exception as e:
-        print(f"An unexpected error occurred in bot logic: {e}")
-        response_text_for_discord = "An unexpected error occurred while processing your request. My apologies."
+            if data.get('status') == 'error':
+                error_message = data.get('message', 'Unknown error from data service.')
+                raise requests.exceptions.RequestException(f"Data service error for symbol {symbol} historical data: {error_message}")
+            
+            historical_values = data.get('values')
+            if not historical_values:
+                raise ValueError(f"No data found for {symbol} with the specified interval and output size. Response: {data}")
 
-    # Send the response back to the Discord channel
-    await message.channel.send(response_text_for_discord)
+            response_data = {
+                "text": (
+                    f"I have retrieved {len(historical_values)} data points for {readable_symbol} "
+                    f"at {interval_str} intervals, covering from {historical_values[-1]['datetime']} to {historical_values[0]['datetime']}. "
+                    f"This data includes Open, High, Low, and Close prices."
+                )
+            }
 
-# Run the bot
-if __name__ == '__main__':
-    if not DISCORD_BOT_TOKEN:
-        print("Error: DISCORD_BOT_TOKEN environment variable not set.")
-    elif not FLASK_WEBHOOK_URL:
-        print("Error: FLASK_WEBHOOK_URL environment variable not set.")
-    elif not GOOGLE_API_KEY:
-        print("Error: GOOGLE_API_KEY environment variable not set.")
-    else:
-        client.run(DISCORD_BOT_TOKEN)
+        elif data_type == 'indicator':
+            if not all([symbol, indicator]): # indicator_period can be defaulted
+                raise ValueError("Missing required parameters for indicator data (symbol, indicator).")
+            
+            indicator_name_upper = indicator.upper()
+            base_api_url = "https://api.twelvedata.com/"
+            indicator_endpoint = ""
+            params = {
+                'symbol': symbol,
+                'interval': interval if interval else '1day', # Default interval
+                'apikey': TWELVE_DATA_API_KEY
+            }
+            
+            # Default indicator_period if not provided by LLM
+            indicator_period_str = str(indicator_period) if indicator_period else '14' 
+
+            # Map indicator and period to Twelve Data API endpoints and parameters
+            if indicator_name_upper == 'RSI':
+                indicator_endpoint = "rsi"
+                params['time_period'] = indicator_period_str
+            elif indicator_name_upper == 'MACD':
+                indicator_endpoint = "macd"
+                params['fast_period'] = 12
+                params['slow_period'] = 26
+                params['signal_period'] = 9
+            elif indicator_name_upper == 'BBANDS':
+                indicator_endpoint = "bbands"
+                params['time_period'] = indicator_period_str
+                params['sd'] = 2 # Standard deviation, common default
+            elif indicator_name_upper == 'STOCHRSI':
+                indicator_endpoint = "stochrsi"
+                params['time_period'] = indicator_period_str
+                params['fast_k_period'] = 3
+                params['fast_d_period'] = 3
+                params['rsi_time_period'] = indicator_period_str
+                params['stoch_time_period'] = indicator_period_str
+            elif indicator_name_upper == 'SMA':
+                indicator_endpoint = "sma"
+                params['time_period'] = indicator_period_str
+            elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Treat MA as EMA
+                indicator_endpoint = "ema"
+                params['time_period'] = indicator_period_str
+            elif indicator_name_upper == 'VWAP': # Added VWAP
+                indicator_endpoint = "vwap"
+                # VWAP typically doesn't take a 'time_period' in the same way as other indicators
+                # It's usually calculated over a session/day. TwelveData's API might just need symbol/interval.
+                # If a period is provided, we can add it, otherwise, rely on default behavior.
+                if indicator_period_str != '0': # If a period is explicitly given, use it
+                    params['time_period'] = indicator_period_str
+            elif indicator_name_upper == 'SUPERTREND': # Added SuperTrend
+                indicator_endpoint = "supertrend"
+                # SuperTrend uses time_period and factor
+                supertrend_period = '10'
+                supertrend_factor = '3'
+                if indicator_period_str and ',' in indicator_period_str:
+                    parts = indicator_period_str.split(',')
+                    if len(parts) == 2:
+                        supertrend_period = parts[0].strip()
+                        supertrend_factor = parts[1].strip()
+                elif indicator_period_str and indicator_period_str != '0':
+                    supertrend_period = indicator_period_str # Use provided as period, factor default
+                
+                params['time_period'] = supertrend_period
+                params['factor'] = supertrend_factor
+            else:
+                raise ValueError(f"Indicator '{indicator}' not supported by direct API.")
+
+            api_url = f"{base_api_url}{indicator_endpoint}"
+            print(f"Fetching {indicator_name_upper} for {symbol} from data service with params: {params}...")
+            response = requests.get(api_url, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get('status') == 'error':
+                error_message = data.get('message', 'Unknown error from data service.')
+                raise requests.exceptions.RequestException(f"Data service error for {indicator_name_upper} for {symbol}: {error_message}")
+            
+            indicator_value = None
+            indicator_description = ""
+            
+            # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
+            if data.get('values') and len(data['values']) > 0:
+                latest_values = data['values'][0] # Get the most recent data point
+                print(f"DEBUG: {indicator_name_upper} - latest_values: {latest_values}") # Debugging print
+
+                if indicator_name_upper == 'RSI':
+                    value = latest_values.get('rsi')
+                    print(f"DEBUG: RSI - raw value: {value}, type: {type(value)}") # Debugging print
+                    if value is not None:
+                        try:
+                            indicator_value = float(str(value).replace(',', '')) # Ensure string before replace
+                            indicator_description = f"{indicator_period_str}-period Relative Strength Index"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during RSI float conversion: {ve} for value: '{value}'")
+                            indicator_value = None # Ensure it's None if conversion fails
+                elif indicator_name_upper == 'MACD':
+                    macd = latest_values.get('macd')
+                    signal = latest_values.get('signal')
+                    histogram = latest_values.get('histogram')
+                    print(f"DEBUG: MACD - raw macd: {macd}, signal: {signal}, histogram: {histogram}") # Debugging print
+                    if all(v is not None for v in [macd, signal, histogram]):
+                        try:
+                            indicator_value = {
+                                'MACD_Line': float(str(macd).replace(',', '')),
+                                'Signal_Line': float(str(signal).replace(',', '')),
+                                'Histogram': float(str(histogram).replace(',', ''))
+                            }
+                            indicator_description = "Moving Average Convergence D-I-vergence"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during MACD float conversion: {ve}")
+                            indicator_value = None
+                elif indicator_name_upper == 'BBANDS':
+                    upper = latest_values.get('upper')
+                    middle = latest_values.get('middle')
+                    lower = latest_values.get('lower')
+                    print(f"DEBUG: BBANDS - raw upper: {upper}, middle: {middle}, lower: {lower}") # Debugging print
+                    if all(v is not None for v in [upper, middle, lower]):
+                        try:
+                            indicator_value = {
+                                'Upper_Band': float(str(upper).replace(',', '')),
+                                'Middle_Band': float(str(middle).replace(',', '')),
+                                'Lower_Band': float(str(lower).replace(',', ''))
+                            }
+                            indicator_description = f"{indicator_period_str}-period Bollinger Bands"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during BBANDS float conversion: {ve}")
+                            indicator_value = None
+                elif indicator_name_upper == 'STOCHRSI':
+                    stochrsi_k = latest_values.get('stochrsi')
+                    stochrsi_d = latest_values.get('stochrsi_signal')
+                    print(f"DEBUG: STOCHRSI - raw K: {stochrsi_k}, D: {stochrsi_d}") # Debugging print
+                    if all(v is not None for v in [stochrsi_k, stochrsi_d]):
+                        try:
+                            indicator_value = {
+                                'StochRSI_K': float(str(stochrsi_k).replace(',', '')),
+                                'StochRSI_D': float(str(stochrsi_d).replace(',', ''))
+                            }
+                            indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during STOCHRSI float conversion: {ve}")
+                            indicator_value = None
+                elif indicator_name_upper == 'SMA':
+                    value = latest_values.get('value')
+                    print(f"DEBUG: SMA - raw value: {value}") # Debugging print
+                    if value is not None:
+                        try:
+                            indicator_value = float(str(value).replace(',', ''))
+                            indicator_description = f"{indicator_period_str}-period Simple Moving Average"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during SMA float conversion: {ve}")
+                            indicator_value = None
+                elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Treat MA as EMA
+                    value = latest_values.get('value')
+                    print(f"DEBUG: EMA - raw value: {value}") # Debugging print
+                    if value is not None:
+                        try:
+                            indicator_value = float(str(value).replace(',', ''))
+                            indicator_description = f"{indicator_period_str}-period Exponential Moving Average"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during EMA float conversion: {ve}")
+                            indicator_value = None
+                elif indicator_name_upper == 'VWAP': # Added VWAP parsing
+                    value = latest_values.get('vwap')
+                    print(f"DEBUG: VWAP - raw value: {value}")
+                    if value is not None:
+                        try:
+                            indicator_value = float(str(value).replace(',', ''))
+                            indicator_description = "Volume Weighted Average Price"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during VWAP float conversion: {ve}")
+                            indicator_value = None
+                elif indicator_name_upper == 'SUPERTREND': # SuperTrend parsing
+                    value = latest_values.get('supertrend')
+                    print(f"DEBUG: SUPERTREND - raw value: {value}")
+                    if value is not None:
+                        try:
+                            indicator_value = float(str(value).replace(',', ''))
+                            # SuperTrend also has a 'trend' value (1 for uptrend, -1 for downtrend)
+                            # We can potentially use this for assessment directly.
+                            indicator_description = f"SuperTrend (Period: {params.get('time_period', 'N/A')}, Factor: {params.get('factor', 'N/A')})"
+                        except ValueError as ve:
+                            print(f"DEBUG: ValueError during SUPERTREND float conversion: {ve}")
+                            indicator_value = None
+
+            if indicator_value is not None:
+                if isinstance(indicator_value, dict):
+                    response_text = f"The {indicator_description} for {readable_symbol} is: "
+                    for key, val in indicator_value.items():
+                        response_text += f"{key}: {val:,.2f}. "
+                    response_data = {"text": response_text.strip()}
+                else:
+                    response_data = {"text": f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."}
+            else:
+                raise ValueError(f"Data service did not return valid indicator values for {indicator_name_upper} for {symbol}. Raw latest_values: {latest_values}")
+
+        elif data_type == 'news':
+            # --- Rate Limiting for NewsAPI.org ---
+            if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
+                time_to_wait = NEWS_API_
