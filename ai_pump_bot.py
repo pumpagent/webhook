@@ -546,66 +546,60 @@ async def on_message(message):
 
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
+
+    # The conversation memory dictionary is still initialized, but we will no longer use it for LLM context.
+    # This ensures no KeyErrors but also no problematic history is passed.
+    # The LLM will now receive only a single-turn prompt for every message.
     
-    # NEW: Handle simple, direct requests without involving the LLM
-    query_lower = user_query.lower()
+    response_text_for_discord = "I'm currently unavailable. Please try again later."
     
-    if query_lower.startswith('price of') or query_lower.startswith('price'):
-        symbol = query_lower.replace('price of', '').replace('price', '').strip().upper()
-        if not symbol:
-            response_text_for_discord = "Please specify a symbol to get the price of. (e.g., 'price of btc/usd')"
-        else:
+    try:
+        # --- Handle simple, direct requests without involving the LLM ---
+        query_lower = user_query.lower()
+        
+        # Check for price queries
+        price_match = re.match(r'^(price of|price)\s+([a-zA-Z0-9\/]+)\s*$', query_lower)
+        if price_match:
+            symbol = price_match.group(2).upper()
             try:
                 live_price_data = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
-                response_text_for_discord = live_price_data.get('text', 'Could not retrieve price.')
+                response_text = live_price_data.get('text', 'Could not retrieve price.')
+                final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
+                for chunk in split_message(final_response):
+                    await message.channel.send(chunk)
+                return
             except Exception as e:
                 print(f"Error fetching live price for {symbol}: {e}")
-                response_text_for_discord = f"An error occurred while fetching the price for {symbol}. Error: {e}"
+                await message.channel.send(f"An error occurred while fetching the price for {symbol}. Error: {e}")
+                return
 
-        final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text_for_discord
-        for chunk in split_message(final_response):
-            await message.channel.send(chunk)
-        return
-    
-    if 'rsi' in query_lower or 'macd' in query_lower or 'bbands' in query_lower or 'stochrsi' in query_lower:
-        # A simple indicator query will be handled directly here
-        match = re.match(r'^([a-zA-Z0-9\/]+)\s+(rsi|macd|bbands|stochrsi)\s*$', query_lower)
-        if match:
-            symbol_for_direct_analysis = match.group(1).upper()
-            indicator_name_for_direct_analysis = match.group(2).upper()
+        # Check for direct indicator queries
+        indicator_match = re.match(r'^([a-zA-Z0-9\/]+)\s+(rsi|macd|bbands|stochrsi|vwap|supertrend|ema|sma|ma)\s*$', query_lower)
+        if indicator_match:
+            symbol = indicator_match.group(1).upper()
+            indicator_name = indicator_match.group(2).upper()
             
             try:
-                # Fetch and analyze single indicator locally, directly
-                indicator_data_json = await _fetch_data_from_twelve_data(
+                indicator_data = await _fetch_data_from_twelve_data(
                     data_type='indicator',
-                    symbol=symbol_for_direct_analysis,
-                    indicator=indicator_name_for_direct_analysis,
+                    symbol=symbol,
+                    indicator=indicator_name,
                     indicator_period='14',
                     interval='1day'
                 )
-                indicator_text = indicator_data_json.get('text', f"{indicator_name_for_direct_analysis} data N/A")
-                
-                # Perform local assessment based on the indicator text
-                assessment = "Neutral"
-                if "The" in indicator_text and "is" in indicator_text:
-                    if indicator_name_for_direct_analysis == 'RSI':
-                        # ... local RSI assessment logic ...
-                        pass
-                    # ... other indicator assessment logic ...
-                
-                response_text_for_discord = f"For {symbol_for_direct_analysis}, {indicator_name_for_direct_analysis} is: **{assessment}**."
+                response_text = indicator_data.get('text', 'No indicator data available.')
+                final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
+                for chunk in split_message(final_response):
+                    await message.channel.send(chunk)
+                return
             except Exception as e:
-                response_text_for_discord = f"An error occurred while fetching {indicator_name_for_direct_analysis} for {symbol_for_direct_analysis}. Error: {e}"
-            
-            final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text_for_discord
-            for chunk in split_message(final_response):
-                await message.channel.send(chunk)
-            return
+                print(f"Error fetching indicator {indicator_name} for {symbol}: {e}")
+                await message.channel.send(f"An error occurred while fetching the indicator {indicator_name} for {symbol}. Error: {e}")
+                return
+        
+        # --- For general, conversational queries, use the LLM (single turn) ---
+        current_chat_history = [{"role": "user", "parts": [{"text": user_query}]}]
 
-    # For general, conversational queries, use the LLM
-    current_chat_history = [{"role": "user", "parts": [{"text": user_query}]}]
-
-    try:
         tools = [
             {
                 "functionDeclarations": [
@@ -640,7 +634,7 @@ async def on_message(message):
 
         llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
         
-        llm_payload_first_turn = {
+        llm_payload = {
             "contents": current_chat_history,
             "tools": tools,
             "safetySettings": [
@@ -652,23 +646,23 @@ async def on_message(message):
         }
 
         try:
-            llm_response_first_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_first_turn)
-            llm_response_first_turn.raise_for_status()
-            llm_data_first_turn = llm_response_first_turn.json()
+            llm_response = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload)
+            llm_response.raise_for_status()
+            llm_data = llm_response.json()
         except requests.exceptions.RequestException as e:
-            print(f"Error connecting to Gemini LLM (first turn): {e}")
+            print(f"Error connecting to Gemini LLM: {e}")
             response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
             for chunk in split_message(response_text_for_discord):
                 await message.channel.send(chunk)
             return
 
-        if llm_data_first_turn and llm_data_first_turn.get('candidates'):
-            candidate_first_turn = llm_data_first_turn['candidates'][0]
-            if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
-                parts_first_turn = candidate_first_turn['content']['parts']
-                if parts_first_turn:
-                    if parts_first_turn[0].get('functionCall'):
-                        function_call = parts_first_turn[0]['functionCall']
+        if llm_data and llm_data.get('candidates'):
+            candidate = llm_data['candidates'][0]
+            if candidate.get('content') and candidate['content'].get('parts'):
+                parts = candidate['content']['parts']
+                if parts:
+                    if parts[0].get('functionCall'):
+                        function_call = parts[0]['functionCall']
                         function_name = function_call['name']
                         function_args = function_call['args']
 
@@ -678,13 +672,17 @@ async def on_message(message):
                             # --- Handle general analysis vs. specific indicator requests from LLM ---
                             if function_args.get('data_type') == 'indicator' and not function_args.get('indicator'):
                                 symbol_for_analysis = function_args.get('symbol')
-                                interval_for_analysis = function_args.get('interval', '1day')
+                                interval_for_analysis = function_args.get('interval', '1day') # Use default if not provided
                                 if symbol_for_analysis:
                                     analysis_text = await _perform_sentiment_analysis(symbol_for_analysis, interval_for_analysis)
-                                    response_text_for_discord = "Disclaimer: This is for informational purposes only and not financial advice.\n\n" + analysis_text
+                                    # Add the disclaimer locally, directly to the final message
+                                    response_text_for_discord = (
+                                        "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n"
+                                        + analysis_text
+                                    )
                                 else:
                                     response_text_for_discord = "Please specify a symbol for analysis."
-                            else: # Specific indicator or data type request
+                            else: # Standard tool call for specific data or news
                                 if 'interval' not in function_args: function_args['interval'] = '1day'
                                 if 'indicator_period' not in function_args:
                                     if function_args.get('indicator', '').upper() == 'MACD': function_args['indicator_period'] = '0'
@@ -694,13 +692,14 @@ async def on_message(message):
                                 
                                 try:
                                     tool_output_data = await _fetch_data_from_twelve_data(**function_args)
-                                    response_text_for_discord = "Disclaimer: This is for informational purposes only and not financial advice.\n\n" + tool_output_data.get('text', 'No response.')
+                                    response_text_for_discord = "Disclaimer: This is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + tool_output_data.get('text', 'No response.')
                                 except Exception as e:
+                                    print(f"Error fetching data from data service via local helper: {e}")
                                     response_text_for_discord = f"An error occurred while processing your request. Error: {e}"
                         else:
                             response_text_for_discord = "AI requested an unknown function."
-                    elif parts_first_turn[0].get('text'):
-                        response_text_for_discord = parts_first_turn[0]['text']
+                    elif parts[0].get('text'):
+                        response_text_for_discord = parts[0]['text']
                     else:
                         print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
                         block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
