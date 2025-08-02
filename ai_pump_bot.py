@@ -537,11 +537,10 @@ async def on_message(message):
     
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
-
+    
     response_text_for_discord = "I'm currently unavailable. Please try again later."
     
     try:
-        # --- Handle simple, direct requests without involving the LLM ---
         query_lower = user_query.lower()
         
         # Check for price queries
