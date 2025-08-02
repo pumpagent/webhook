@@ -341,7 +341,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                         response_text += f"{key}: {val:,.2f}. "
                     response_data = {"text": response_text.strip()}
                 else:
-                    response_data = {"text": f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."}
+                    response_text = f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."
             else:
                 raise ValueError(f"Data service did not return valid indicator values for {indicator_name_upper} for {symbol}. Raw latest_values: {latest_values}")
 
@@ -365,7 +365,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 f"from={from_date_str}&"
                 f"sortBy={sort_by_str}&"
                 f"language={news_language_str}&"
-                f"apiKey={NEWS_API_KEY}"
+                f"apiKey={NEWS_API_KEY}" # Use NEWS_API_KEY directly
             )
             print(f"Fetching news for '{news_query}' from News API...")
             response = requests.get(api_url)
@@ -414,6 +414,7 @@ async def _perform_sentiment_analysis(symbol, interval_str):
         match = re.search(r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', price_text)
         if match:
             current_price_val = float(match.group(1).replace(',', ''))
+            analysis_results.append(f"Current Price: ${current_price_val:,.2f}")
     except Exception as e:
         print(f"Error fetching live price for sentiment analysis: {e}")
 
@@ -442,7 +443,6 @@ async def _perform_sentiment_analysis(symbol, interval_str):
             )
             indicator_text = indicator_data_json.get('text', f"{indicator_name} data N/A")
             
-            # --- Assess Indicator Sentiment ---
             if "The" in indicator_text and "is" in indicator_text:
                 if indicator_name == 'RSI':
                     try:
@@ -640,7 +640,7 @@ async def on_message(message):
                                     # This is the final response, no second LLM call needed
                                 else:
                                     response_text_for_discord = "Please specify a symbol for analysis."
-                            else:
+                            else: # Standard tool call for specific data or news
                                 if 'interval' not in function_args:
                                     function_args['interval'] = '1day'
                                 if 'indicator_period' not in function_args:
@@ -665,10 +665,10 @@ async def on_message(message):
                                 except Exception as e:
                                     print(f"Unexpected error during data fetch: {e}")
                                     tool_output_text = f"An unexpected error occurred: {e}"
-                                
+                            
                                 current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
-
-                                # Second LLM call for a conversational response (since this wasn't a "Pump/Dump" query)
+                                
+                                # This is the original second LLM call for conversational responses
                                 llm_payload_second_turn = {
                                     "contents": current_chat_history,
                                     "tools": tools,
@@ -683,7 +683,6 @@ async def on_message(message):
                                     "You are a technical analysis bot named Pump. "
                                     "Always start your response with: 'Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.' "
                                     "Then, based on the provided data or tool output, provide a concise and direct answer to the user's query. "
-                                    "If the tool output is a comprehensive sentiment analysis, present the overall outlook (Pump, Dump, Neutral, or Undetermined) and then the individual indicator assessments. "
                                     "Do not ask follow-up questions unless absolutely necessary due to missing critical information."
                                 )
                                 llm_payload_second_turn["contents"].insert(0, {"role": "system", "parts": [{"text": system_instruction_text}]})
