@@ -609,7 +609,7 @@ async def on_message(message):
                         },
                         "required": ["symbol", "data_type"]
                     }
-                ]
+               }
             }
         ]
 
