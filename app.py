@@ -22,9 +22,9 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between API calls)
+TWELVE_DATA_MIN_INTERVAL =  # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
-NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
+NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
 api_response_cache = {}
 CACHE_DURATION = 10 # Cache responses for 10 seconds
 
@@ -365,7 +365,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 f"from={from_date_str}&"
                 f"sortBy={sort_by_str}&"
                 f"language={news_language_str}&"
-                f"apiKey={NEWS_API_KEY}" # Use NEWS_API_KEY directly
+                f"apiKey={NEWS_API_KEY}"
             )
             print(f"Fetching news for '{news_query}' from News API...")
             response = requests.get(api_url)
@@ -565,7 +565,8 @@ async def on_message(message):
                             "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query. "
                             "If the user asks for a general outlook, sentiment, or bullish/bearish assessment for a symbol (e.g., 'Is BTC bullish?', 'Outlook for ETH?', 'Sentiment for SOL?'), "
                             "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter**. "
-                            "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD)."
+                            "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD). "
+                            "If the user asks for a price prediction or price target, use `data_type='indicator'` and the symbol."
                         ),
                         "parameters": {
                             "type": "object",
@@ -721,7 +722,7 @@ async def on_message(message):
                     response_text_for_discord = "AI did not provide content in its response."
             else:
                 response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-                if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason']:
+                if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
                     response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
             
             conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
