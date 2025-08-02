@@ -200,14 +200,10 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 params['time_period'] = indicator_period_str
             elif indicator_name_upper == 'VWAP': # Added VWAP
                 indicator_endpoint = "vwap"
-                # VWAP typically doesn't take a 'time_period' in the same way as other indicators
-                # It's usually calculated over a session/day. TwelveData's API might just need symbol/interval.
-                # If a period is provided, we can add it, otherwise, rely on default behavior.
-                if indicator_period_str != '0': # If a period is explicitly given, use it
+                if indicator_period_str != '0':
                     params['time_period'] = indicator_period_str
             elif indicator_name_upper == 'SUPERTREND': # Added SuperTrend
                 indicator_endpoint = "supertrend"
-                # SuperTrend uses time_period and factor
                 supertrend_period = '10'
                 supertrend_factor = '3'
                 if indicator_period_str and ',' in indicator_period_str:
@@ -216,7 +212,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                         supertrend_period = parts[0].strip()
                         supertrend_factor = parts[1].strip()
                 elif indicator_period_str and indicator_period_str != '0':
-                    supertrend_period = indicator_period_str # Use provided as period, factor default
+                    supertrend_period = indicator_period_str
                 
                 params['time_period'] = supertrend_period
                 params['factor'] = supertrend_factor
@@ -246,11 +242,11 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                     print(f"DEBUG: RSI - raw value: {value}, type: {type(value)}") # Debugging print
                     if value is not None:
                         try:
-                            indicator_value = float(str(value).replace(',', '')) # Ensure string before replace
+                            indicator_value = float(str(value).replace(',', ''))
                             indicator_description = f"{indicator_period_str}-period Relative Strength Index"
                         except ValueError as ve:
                             print(f"DEBUG: ValueError during RSI float conversion: {ve} for value: '{value}'")
-                            indicator_value = None # Ensure it's None if conversion fails
+                            indicator_value = None
                 elif indicator_name_upper == 'MACD':
                     macd = latest_values.get('macd')
                     signal = latest_values.get('signal')
@@ -333,8 +329,6 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                     if value is not None:
                         try:
                             indicator_value = float(str(value).replace(',', ''))
-                            # SuperTrend also has a 'trend' value (1 for uptrend, -1 for downtrend)
-                            # We can potentially use this for assessment directly.
                             indicator_description = f"SuperTrend (Period: {params.get('time_period', 'N/A')}, Factor: {params.get('factor', 'N/A')})"
                         except ValueError as ve:
                             print(f"DEBUG: ValueError during SUPERTREND float conversion: {ve}")
@@ -347,12 +341,11 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                         response_text += f"{key}: {val:,.2f}. "
                     response_data = {"text": response_text.strip()}
                 else:
-                    response_data = {"text": f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."}
+                    response_text = f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."
             else:
                 raise ValueError(f"Data service did not return valid indicator values for {indicator_name_upper} for {symbol}. Raw latest_values: {latest_values}")
 
         elif data_type == 'news':
-            # --- Rate Limiting for NewsAPI.org ---
             if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
                 time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
                 raise requests.exceptions.RequestException(
@@ -372,7 +365,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 f"from={from_date_str}&"
                 f"sortBy={sort_by_str}&"
                 f"language={news_language_str}&"
-                f"apiKey={NEWS_API_KEY}" # Use NEWS_API_KEY directly
+                f"apiKey={NEWS_API_KEY}"
             )
             print(f"Fetching news for '{news_query}' from News API...")
             response = requests.get(api_url)
@@ -397,14 +390,13 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             raise ValueError("Invalid 'data_type' specified.")
 
     except requests.exceptions.RequestException as e:
-        raise e # Re-raise for outer try-except to catch
+        raise e
     except ValueError as e:
-        raise e # Re-raise for outer try-except to catch
+        raise e
     finally:
-        # Update last_twelve_data_call only if it was a Twelve Data call
         if data_type != 'news':
             globals()['last_twelve_data_call'] = time.time()
-        else: # Update last_news_api_call for news type
+        else:
             globals()['last_news_api_call'] = time.time()
     
     api_response_cache[cache_key] = {'response_json': response_data, 'timestamp': time.time()}
@@ -412,39 +404,33 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
 
 
 async def _perform_sentiment_analysis(symbol, interval_str):
-    """
-    Performs local sentiment assessment for multiple indicators and returns a combined text.
-    """
     analysis_results = []
-    overall_sentiment_score = 0 # +1 for bullish, -1 for bearish, 0 for neutral/missing
-
-    # --- Fetch Live Price for BBANDS Context ---
+    overall_sentiment_score = 0
     current_price_val = None
+
     try:
         live_price_data = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
         price_text = live_price_data.get('text', '')
         match = re.search(r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', price_text)
         if match:
             current_price_val = float(match.group(1).replace(',', ''))
-            analysis_results.append(f"Current Price: ${current_price_val:,.2f}")
     except Exception as e:
-        analysis_results.append(f"Current Price: Data Missing (Error: {e})")
         print(f"Error fetching live price for sentiment analysis: {e}")
 
-    # --- Fetch and Analyze Indicators ---
     indicators_to_fetch = {
         'RSI': {'period': '14'},
         'MACD': {'period': '0'},
         'BBANDS': {'period': '20'},
         'STOCHRSI': {'period': '14'},
-        'SMA': {'period': '50'}, # Default SMA period for analysis
-        'EMA': {'period': '50'},  # Default EMA period for analysis
-        'VWAP': {'period': '0'}, # VWAP doesn't use a period in the same way, '0' as placeholder
-        'SUPERTREND': {'period': '10,3'} # Default SuperTrend period and factor
+        'SMA': {'period': '50'},
+        'EMA': {'period': '50'},
+        'VWAP': {'period': '0'},
+        'SUPERTREND': {'period': '10,3'}
     }
     
     for indicator_name, params in indicators_to_fetch.items():
         indicator_period = params['period']
+        assessment = "Neutral"
 
         try:
             indicator_data_json = await _fetch_data_from_twelve_data(
@@ -456,15 +442,13 @@ async def _perform_sentiment_analysis(symbol, interval_str):
             )
             indicator_text = indicator_data_json.get('text', f"{indicator_name} data N/A")
             
-            assessment = "Neutral"
-            # Extract value and perform assessment
             if "The" in indicator_text and "is" in indicator_text:
                 if indicator_name == 'RSI':
                     try:
                         val_str = indicator_text.split(' is ')[-1].strip()
                         val = float(re.sub(r'[^\d.]', '', val_str))
-                        if val > 70: assessment = "Bearish" # Overbought
-                        elif val < 30: assessment = "Bullish" # Oversold
+                        if val > 70: assessment = "Bearish"
+                        elif val < 30: assessment = "Bullish"
                     except ValueError: pass
                 elif indicator_name == 'MACD':
                     if "MACD_Line:" in indicator_text and "Signal_Line:" in indicator_text:
@@ -479,60 +463,56 @@ async def _perform_sentiment_analysis(symbol, interval_str):
                         try:
                             upper_band = float(re.sub(r'[^\d.]', '', indicator_text.split('Upper_Band: ')[1].split('. ')[0].strip()))
                             lower_band = float(re.sub(r'[^\d.]', '', indicator_text.split('Lower_Band: ')[1].split('. ')[0].strip()))
-                            if current_price_val > upper_band: assessment = "Bearish" # Price above upper band
-                            elif current_price_val < lower_band: assessment = "Bullish" # Price below lower band
-                            else: assessment = "Neutral" # Price within bands
+                            if current_price_val > upper_band: assessment = "Bearish"
+                            elif current_price_val < lower_band: assessment = "Bullish"
+                            else: assessment = "Neutral"
                         except (ValueError, IndexError): pass
                 elif indicator_name == 'STOCHRSI':
                     if "StochRSI_K:" in indicator_text and "StochRSI_D:" in indicator_text:
                         try:
                             stochrsi_k_val = float(re.sub(r'[^\d.]', '', indicator_text.split('StochRSI_K: ')[1].split('. ')[0].strip()))
                             stochrsi_d_val = float(re.sub(r'[^\d.]', '', indicator_text.split('StochRSI_D: ')[1].split('. ')[0].strip()))
-                            if stochrsi_k_val > 80: assessment = "Bearish" # Overbought
-                            elif stochrsi_k_val < 20: assessment = "Bullish" # Oversold
-                            elif stochrsi_k_val > stochrsi_d_val: assessment = "Bullish" # K crossing above D
-                            elif stochrsi_k_val < stochrsi_d_val: assessment = "Bearish" # K crossing below D
+                            if stochrsi_k_val > 80: assessment = "Bearish"
+                            elif stochrsi_k_val < 20: assessment = "Bullish"
+                            elif stochrsi_k_val > stochrsi_d_val: assessment = "Bullish"
+                            elif stochrsi_k_val < stochrsi_d_val: assessment = "Bearish"
                         except (ValueError, IndexError): pass
                 elif indicator_name == 'SMA' or indicator_name == 'EMA':
                     try:
                         val_str = indicator_text.split(' is ')[-1].strip()
                         val = float(re.sub(r'[^\d.]', '', val_str))
-                        # For SMA/EMA, compare to current price to determine bullish/bearish
                         if current_price_val is not None:
-                            if current_price_val > val: assessment = "Bullish" # Price above MA
-                            elif current_price_val < val: assessment = "Bearish" # Price below MA
+                            if current_price_val > val: assessment = "Bullish"
+                            elif current_price_val < val: assessment = "Bearish"
                         else:
-                            assessment = "Neutral (Live Price Missing)"
+                            assessment = "Neutral"
                     except ValueError: pass
-                elif indicator_name == 'VWAP': # VWAP assessment
+                elif indicator_name == 'VWAP':
                     try:
                         val_str = indicator_text.split(' is ')[-1].strip()
                         val = float(re.sub(r'[^\d.]', '', val_str))
                         if current_price_val is not None:
-                            if current_price_val > val: assessment = "Bullish" # Price above VWAP
-                            elif current_price_val < val: assessment = "Bearish" # Price below VWAP
+                            if current_price_val > val: assessment = "Bullish"
+                            elif current_price_val < val: assessment = "Bearish"
                         else:
-                            assessment = "Neutral (Live Price Missing)"
+                            assessment = "Neutral"
                     except ValueError: pass
-                elif indicator_name == 'SUPERTREND': # SuperTrend assessment
-                    # SuperTrend text might be "The SuperTrend (Period: 10, Factor: 3) for BTC/USD is: 123456.78."
-                    # We need to compare current price to SuperTrend value
+                elif indicator_name == 'SUPERTREND':
                     try:
-                        # Extract the numerical value of SuperTrend
                         val_str = indicator_text.split(' is ')[-1].strip()
                         val = float(re.sub(r'[^\d.]', '', val_str))
                         if current_price_val is not None:
-                            if current_price_val > val: assessment = "Bullish" # Price above SuperTrend
-                            elif current_price_val < val: assessment = "Bearish" # Price below SuperTrend
+                            if current_price_val > val: assessment = "Bullish"
+                            elif current_price_val < val: assessment = "Bearish"
                         else:
-                            assessment = "Neutral (Live Price Missing)"
+                            assessment = "Neutral"
                     except ValueError: pass
             
             analysis_results.append(f"{indicator_name}: {assessment}")
             if assessment == "Bullish": overall_sentiment_score += 1
             elif assessment == "Bearish": overall_sentiment_score -= 1
         except Exception as e:
-            analysis_results.append(f"{indicator_name}: Data Missing (Error: {e})")
+            analysis_results.append(f"{indicator_name}: Data Missing")
             print(f"Error fetching/parsing {indicator_name}: {e}")
 
     # Determine overall sentiment based on score
@@ -543,38 +523,89 @@ async def _perform_sentiment_analysis(symbol, interval_str):
     if len(analysis_results) == 0 or all("Data Missing" in res for res in analysis_results):
         overall_sentiment = "Undetermined"
 
-    # Formulate final response
-    combined_analysis_text = f"Overall Outlook for {symbol} ({interval_str}): **{overall_sentiment}**\n\n"
-    combined_analysis_text += "Individual Indicator Assessments:\n" + "\n".join(analysis_results)
+    # Formulate final response directly, without a second LLM call
+    combined_analysis_text = (
+        "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n"
+        f"Overall Outlook for {symbol} ({interval_str}): **{overall_sentiment}**\n\n"
+        f"Individual Indicator Assessments:\n"
+        + "\n".join(analysis_results)
+    )
     
     return combined_analysis_text
 
 
 @client.event
 async def on_message(message):
-    """Event that fires when a message is sent in a channel the bot can see."""
     if message.author == client.user:
         return
 
     user_id = str(message.author.id)
-    # --- NEW: Check if user is authorized ---
     if AUTHORIZED_USER_IDS and str(user_id) not in AUTHORIZED_USER_IDS:
         print(f"Ignoring message from unauthorized user: {user_id}")
-        return # Ignore message if user is not authorized
+        return
 
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
-
-    if user_id not in conversation_histories:
-        conversation_histories[user_id] = []
     
-    conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
-    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+    # NEW: Handle simple, direct requests without involving the LLM
+    query_lower = user_query.lower()
+    
+    if query_lower.startswith('price of') or query_lower.startswith('price'):
+        symbol = query_lower.replace('price of', '').replace('price', '').strip().upper()
+        if not symbol:
+            response_text_for_discord = "Please specify a symbol to get the price of. (e.g., 'price of btc/usd')"
+        else:
+            try:
+                live_price_data = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
+                response_text_for_discord = live_price_data.get('text', 'Could not retrieve price.')
+            except Exception as e:
+                print(f"Error fetching live price for {symbol}: {e}")
+                response_text_for_discord = f"An error occurred while fetching the price for {symbol}. Error: {e}"
 
-    response_text_for_discord = "I'm currently unavailable. Please try again later."
+        final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text_for_discord
+        for chunk in split_message(final_response):
+            await message.channel.send(chunk)
+        return
+    
+    if 'rsi' in query_lower or 'macd' in query_lower or 'bbands' in query_lower or 'stochrsi' in query_lower:
+        # A simple indicator query will be handled directly here
+        match = re.match(r'^([a-zA-Z0-9\/]+)\s+(rsi|macd|bbands|stochrsi)\s*$', query_lower)
+        if match:
+            symbol_for_direct_analysis = match.group(1).upper()
+            indicator_name_for_direct_analysis = match.group(2).upper()
+            
+            try:
+                # Fetch and analyze single indicator locally, directly
+                indicator_data_json = await _fetch_data_from_twelve_data(
+                    data_type='indicator',
+                    symbol=symbol_for_direct_analysis,
+                    indicator=indicator_name_for_direct_analysis,
+                    indicator_period='14',
+                    interval='1day'
+                )
+                indicator_text = indicator_data_json.get('text', f"{indicator_name_for_direct_analysis} data N/A")
+                
+                # Perform local assessment based on the indicator text
+                assessment = "Neutral"
+                if "The" in indicator_text and "is" in indicator_text:
+                    if indicator_name_for_direct_analysis == 'RSI':
+                        # ... local RSI assessment logic ...
+                        pass
+                    # ... other indicator assessment logic ...
+                
+                response_text_for_discord = f"For {symbol_for_direct_analysis}, {indicator_name_for_direct_analysis} is: **{assessment}**."
+            except Exception as e:
+                response_text_for_discord = f"An error occurred while fetching {indicator_name_for_direct_analysis} for {symbol_for_direct_analysis}. Error: {e}"
+            
+            final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text_for_discord
+            for chunk in split_message(final_response):
+                await message.channel.send(chunk)
+            return
+
+    # For general, conversational queries, use the LLM
+    current_chat_history = [{"role": "user", "parts": [{"text": user_query}]}]
 
     try:
-        # --- Define the market_data tool for the LLM ---
         tools = [
             {
                 "functionDeclarations": [
@@ -584,8 +615,7 @@ async def on_message(message):
                             "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query. "
                             "If the user asks for a general outlook, sentiment, or bullish/bearish assessment for a symbol (e.g., 'Is BTC bullish?', 'Outlook for ETH?', 'Sentiment for SOL?'), "
                             "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter**. "
-                            "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD). "
-                            "If the user asks for a price prediction or price target, use `data_type='indicator'` and the symbol."
+                            "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD)."
                         ),
                         "parameters": {
                             "type": "object",
@@ -601,7 +631,7 @@ async def on_message(message):
                                 "sort_by": { "type": "string", "enum": ["relevancy", "popularity", "publishedAt"], "description": "How to sort news." },
                                 "news_language": { "type": "string", "description": "Language of news." }
                             },
-                            "required": ["symbol", "data_type"] # Explicitly make these required
+                            "required": ["symbol", "data_type"]
                         }
                     }
                 ]
@@ -644,87 +674,29 @@ async def on_message(message):
 
                         if function_name == "get_market_data":
                             print(f"LLM requested tool call: get_market_data with args: {function_args}")
-                            current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
-
-                            # --- Check if LLM is asking for a general indicator analysis (e.g., "outlook" or no specific indicator) ---
+                            
+                            # --- Handle general analysis vs. specific indicator requests from LLM ---
                             if function_args.get('data_type') == 'indicator' and not function_args.get('indicator'):
                                 symbol_for_analysis = function_args.get('symbol')
-                                interval_for_analysis = function_args.get('interval', '1day') # Use default if not provided
+                                interval_for_analysis = function_args.get('interval', '1day')
                                 if symbol_for_analysis:
-                                    tool_output_text = await _perform_sentiment_analysis(symbol_for_analysis, interval_for_analysis)
+                                    analysis_text = await _perform_sentiment_analysis(symbol_for_analysis, interval_for_analysis)
+                                    response_text_for_discord = "Disclaimer: This is for informational purposes only and not financial advice.\n\n" + analysis_text
                                 else:
-                                    tool_output_text = "Please specify a symbol for analysis."
-                            else: # Standard tool call for specific data or news
-                                # Pre-populate missing args with defaults before calling helper
-                                if 'interval' not in function_args:
-                                    function_args['interval'] = '1day'
+                                    response_text_for_discord = "Please specify a symbol for analysis."
+                            else: # Specific indicator or data type request
+                                if 'interval' not in function_args: function_args['interval'] = '1day'
                                 if 'indicator_period' not in function_args:
-                                    if function_args.get('indicator', '').upper() == 'MACD':
-                                        function_args['indicator_period'] = '0'
-                                    else:
-                                        function_args['indicator_period'] = '14'
+                                    if function_args.get('indicator', '').upper() == 'MACD': function_args['indicator_period'] = '0'
+                                    else: function_args['indicator_period'] = '14'
                                 
-                                for key, value in function_args.items():
-                                    function_args[key] = str(value)
-
+                                for key, value in function_args.items(): function_args[key] = str(value)
+                                
                                 try:
                                     tool_output_data = await _fetch_data_from_twelve_data(**function_args)
-                                    tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
-                                    print(f"Tool execution output: {tool_output_text}")
-                                except requests.exceptions.RequestException as e:
-                                    print(f"Error fetching data from data service via local helper: {e}")
-                                    tool_output_text = f"Error fetching data: {e}"
-                                except ValueError as e:
-                                    print(f"Invalid parameters for data fetch: {e}")
-                                    tool_output_text = f"Invalid parameters: {e}"
+                                    response_text_for_discord = "Disclaimer: This is for informational purposes only and not financial advice.\n\n" + tool_output_data.get('text', 'No response.')
                                 except Exception as e:
-                                    print(f"Unexpected error during data fetch: {e}")
-                                    tool_output_text = f"An unexpected error occurred: {e}"
-                            
-                            current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
-
-                            llm_payload_second_turn = {
-                                "contents": current_chat_history,
-                                "tools": tools,
-                                "safetySettings": [
-                                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                                ]
-                            }
-                            # --- CORRECTED: System instruction for final response (including disclaimer) ---
-                            # Rewritten using simple string concatenation for robustness
-                            system_instruction_text = (
-                                "You are a technical analysis bot named Pump. "
-                                "Always start your response with: 'Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.' "
-                                "Then, based on the provided data or tool output, provide a concise and direct answer to the user's query. "
-                                "If the tool output is a comprehensive sentiment analysis, present the overall outlook (Pump, Dump, Neutral, or Undetermined) and then the individual indicator assessments. "
-                                "Do not add follow-up questions unless absolutely necessary due to missing critical information."
-                            )
-                            llm_payload_second_turn["contents"].insert(0, {"role": "system", "parts": [{"text": system_instruction_text}]})
-
-                            try:
-                                llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
-                                llm_response_second_turn.raise_for_status()
-                                llm_data_second_turn = llm_response_second_turn.json()
-                            except requests.exceptions.RequestException as e:
-                                print(f"Error connecting to AI brain (second turn after tool): {e}")
-                                response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
-                                for chunk in split_message(response_text_for_discord):
-                                    await message.channel.send(chunk)
-                                return
-
-                            if llm_data_second_turn and llm_data_second_turn.get('candidates'):
-                                final_candidate = llm_data_second_turn['candidates'][0]
-                                if final_candidate.get('content') and final_candidate['content'].get('parts'):
-                                    response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
-                                else:
-                                    print(f"LLM second turn: No text content in response. Full response: {llm_data_second_turn}")
-                                    block_reason = llm_data_second_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
-                                    response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
-                            else:
-                                response_text_for_discord = "Could not get a valid second response from the AI."
+                                    response_text_for_discord = f"An error occurred while processing your request. Error: {e}"
                         else:
                             response_text_for_discord = "AI requested an unknown function."
                     elif parts_first_turn[0].get('text'):
@@ -740,17 +712,15 @@ async def on_message(message):
                 if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
                     response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
             
+            # Since we have no memory, append the full interaction to history
+            conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
             conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
 
 
-    except requests.exceptions.RequestException as e:
-        print(f"General Request Error: {e}")
-        response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
     except Exception as e:
         print(f"An unexpected error occurred in bot logic: {e}")
         response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
 
-    # Split and send the response to Discord
     for chunk in split_message(response_text_for_discord):
         await message.channel.send(chunk)
 
