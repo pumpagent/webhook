@@ -28,15 +28,11 @@ NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
 api_response_cache = {}
 CACHE_DURATION = 10 # Cache responses for 10 seconds
 
-# --- Conversation Memory (In-memory, volatile on bot restart) ---
-conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
-MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memory for LLM context
-
 # --- AUTHORIZED USERS (Add your Discord User IDs here) ---
 # Messages from users NOT in this list will be ignored.
 # You can get your Discord User ID by enabling Developer Mode (User Settings -> Advanced)
 # then right-clicking your username and selecting "Copy ID".
-AUTHORIZED_USER_IDS = ["1396459069874634753", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
+AUTHORIZED_USER_IDS = ["918556208217067561", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
 
 # Discord message character limit
 DISCORD_MESSAGE_MAX_LENGTH = 2000
@@ -414,7 +410,6 @@ async def _perform_sentiment_analysis(symbol, interval_str):
         match = re.search(r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', price_text)
         if match:
             current_price_val = float(match.group(1).replace(',', ''))
-            analysis_results.append(f"Current Price: ${current_price_val:,.2f}")
     except Exception as e:
         print(f"Error fetching live price for sentiment analysis: {e}")
 
@@ -547,14 +542,10 @@ async def on_message(message):
 
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
-
-    # NEW: Check for simple, direct requests first
-    if user_query.lower().startswith('price of'):
-        symbol = user_query.lower().replace('price of', '').strip().upper()
-        if not symbol:
-            await message.channel.send("Please specify a symbol to get the price of. (e.g., 'price of btc/usd')")
-            return
-        
+    
+    # NEW: Simple, direct queries bypass the LLM entirely
+    if re.match(r'^(price\s+of|price)\s+([a-zA-Z0-9\/]+)', user_query.lower()):
+        symbol = re.match(r'^(price\s+of|price)\s+([a-zA-Z0-9\/]+)', user_query.lower()).group(2).upper()
         try:
             live_price_data = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
             response_text = live_price_data.get('text', 'Could not retrieve price.')
@@ -566,13 +557,10 @@ async def on_message(message):
             print(f"Error fetching live price for {symbol}: {e}")
             await message.channel.send(f"An error occurred while fetching the price for {symbol}. Error: {e}")
             return
-
-
-    if user_id not in conversation_histories:
-        conversation_histories[user_id] = []
-    
-    conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
-    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+            
+    # Reset conversation history for new, non-direct requests
+    conversation_histories[user_id] = [{"role": "user", "parts": [{"text": user_query}]}]
+    current_chat_history = conversation_histories[user_id]
 
     response_text_for_discord = "I'm currently unavailable. Please try again later."
 
@@ -587,151 +575,8 @@ async def on_message(message):
                             "If the user asks for a general outlook, sentiment, or bullish/bearish assessment for a symbol (e.g., 'Is BTC bullish?', 'Outlook for ETH?', 'Sentiment for SOL?'), "
                             "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter**. "
                             "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD). "
-                            "If the user asks for a price prediction or price target, use `data_type='indicator'` and the symbol."
                         ),
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." },
-                                "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch (live, historical, indicator, news). This is required." },
-                                "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
-                                "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
-                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI", "VWAP", "SUPERTREND"], "description": "Name of the technical indicator. Required if data_type is 'indicator' AND a specific indicator is requested by the user." },
-                                "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD. For SUPERTREND, this can be 'time_period,factor' (e.g., '10,3')." },
-                                "news_query": { "type": "string", "description": "Keywords for news search." },
-                                "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
-                                "sort_by": { "type": "string", "enum": ["relevancy", "popularity", "publishedAt"], "description": "How to sort news." },
-                                "news_language": { "type": "string", "description": "Language of news." }
-                            },
-                            "required": ["symbol", "data_type"]
-                        }
-                    }
-                ]
-            }
-        ]
-
-        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
-        
-        llm_payload_first_turn = {
-            "contents": current_chat_history,
-            "tools": tools,
-            "safetySettings": [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            ]
-        }
-
-        try:
-            llm_response_first_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_first_turn)
-            llm_response_first_turn.raise_for_status()
-            llm_data_first_turn = llm_response_first_turn.json()
-        except requests.exceptions.RequestException as e:
-            print(f"Error connecting to Gemini LLM (first turn): {e}")
-            response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
-            for chunk in split_message(response_text_for_discord):
-                await message.channel.send(chunk)
-            return
-
-        if llm_data_first_turn and llm_data_first_turn.get('candidates'):
-            candidate_first_turn = llm_data_first_turn['candidates'][0]
-            if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
-                parts_first_turn = candidate_first_turn['content']['parts']
-                if parts_first_turn:
-                    if parts_first_turn[0].get('functionCall'):
-                        function_call = parts_first_turn[0]['functionCall']
-                        function_name = function_call['name']
-                        function_args = function_call['args']
-
-                        if function_name == "get_market_data":
-                            print(f"LLM requested tool call: get_market_data with args: {function_args}")
-                            
-                            # Pre-populate missing args with defaults before calling helper
-                            if 'interval' not in function_args:
-                                function_args['interval'] = '1day'
-                            if 'indicator_period' not in function_args:
-                                if function_args.get('indicator', '').upper() == 'MACD':
-                                    function_args['indicator_period'] = '0'
-                                else:
-                                    function_args['indicator_period'] = '14'
-                            
-                            for key, value in function_args.items():
-                                function_args[key] = str(value)
-
-                            try:
-                                tool_output_data = await _fetch_data_from_twelve_data(**function_args)
-                                tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
-                                print(f"Tool execution output: {tool_output_text}")
-                            except requests.exceptions.RequestException as e:
-                                print(f"Error fetching data from data service via local helper: {e}")
-                                response_text_for_discord = f"I'm having trouble fetching data from the API. Error: {e}"
-                                for chunk in split_message(response_text_for_discord):
-                                    await message.channel.send(chunk)
-                                return
-                            except ValueError as e:
-                                print(f"Invalid parameters for data fetch: {e}")
-                                response_text_for_discord = f"An error occurred with the parameters provided. Error: {e}"
-                                for chunk in split_message(response_text_for_discord):
-                                    await message.channel.send(chunk)
-                                return
-                            except Exception as e:
-                                print(f"Unexpected error during data fetch: {e}")
-                                response_text_for_discord = f"An unexpected error occurred: {e}"
-                                for chunk in split_message(response_text_for_discord):
-                                    await message.channel.send(chunk)
-                                return
-                            
-                            # --- Use the tool output to construct a simple final response ---
-                            response_text_for_discord = (
-                                "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n"
-                                + tool_output_text
-                            )
-                            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-                            
-                        else:
-                            response_text_for_discord = "AI requested an unknown function."
-                    elif parts_first_turn[0].get('text'):
-                        response_text_for_discord = parts_first_turn[0]['text']
-                        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-                    else:
-                        print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
-                        block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
-                        response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
-                        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-
-                else:
-                    response_text_for_discord = "AI did not provide content in its response."
-                    conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-            else:
-                response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-                if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
-                    response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
-                conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-
-
-    except requests.exceptions.RequestException as e:
-        print(f"General Request Error: {e}")
-        response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
-        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-    except Exception as e:
-        print(f"An unexpected error occurred in bot logic: {e}")
-        response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
-        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-
-
-    # Split and send the response to Discord
-    for chunk in split_message(response_text_for_discord):
-        await message.channel.send(chunk)
-
-if __name__ == '__main__':
-    if not DISCORD_BOT_TOKEN:
-        print("Error: DISCORD_BOT_TOKEN environment variable not set.")
-    elif not TWELVE_DATA_API_KEY:
-        print("Error: TWELVE_DATA_API_KEY environment variable not set.")
-    elif not GOOGLE_API_KEY:
-        print("Error: GOOGLE_API_KEY environment variable not set.")
-    else:
-        client.run(DISCORD_BOT_TOKEN)
-```
-
+                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/
