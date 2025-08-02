@@ -36,7 +36,7 @@ MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memo
 # Messages from users NOT in this list will be ignored.
 # You can get your Discord User ID by enabling Developer Mode (User Settings -> Advanced)
 # then right-clicking your username and selecting "Copy ID".
-AUTHORIZED_USER_IDS = ["918556208217067561", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
+AUTHORIZED_USER_IDS = ["YOUR_DISCORD_USER_ID_HERE", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
 
 # Discord message character limit
 DISCORD_MESSAGE_MAX_LENGTH = 2000
