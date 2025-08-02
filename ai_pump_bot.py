@@ -610,7 +610,7 @@ async def on_message(message):
                         "required": ["symbol", "data_type"]
                     }
                }
-            }
+             ]
         ]
 
         llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
