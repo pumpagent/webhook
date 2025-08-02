@@ -1,391 +1,51 @@
-import os
+
 import discord
 import requests
-import json
-import re # Import regex for parsing indicator values
-import time # For rate limiting
-from datetime import datetime, timedelta # Import for date handling
+import json # Import json for parsing LLM tool calls
 
 # --- API Keys and URLs (Set as Environment Variables on Render) ---
+# Discord Bot Token (from Discord Developer Portal)
 DISCORD_BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
+# Your Flask Webhook URL (e.g., https://pricelookupwebhook.onrender.com/market_data)
+FLASK_WEBHOOK_URL = os.environ.get('FLASK_WEBHOOK_URL')
+# Google API Key for Gemini (ensure this is set for LLM calls)
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY') # Directly used by the bot
-NEWS_API_KEY = os.environ.get('NEWS_API_KEY') # Directly used by the bot
+
 
 # --- Discord Bot Setup ---
+# Define Discord intents (crucial for message content)
 intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-intents.presences = True
+intents.message_content = True # Enable message content intent
+intents.members = True       # Enable server members intent (if needed for user info)
+intents.presences = True     # Enable presence intent (if needed)
 
 client = discord.Client(intents=intents)
 
-# --- Rate Limiting & Caching Configuration ---
-last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between API calls)
-last_news_api_call = 0
-NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
-api_response_cache = {}
-CACHE_DURATION = 10 # Cache responses for 10 seconds
-
-# --- Conversation Memory (In-memory, volatile on bot restart) ---
-conversation_histories = {} # Format: {user_id: [{"role": "user/model/function", "parts": [...]}, ...]}
-MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memory for LLM context
-
-# Discord message character limit
-DISCORD_MESSAGE_MAX_LENGTH = 2000
-
-def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
-    """Splits a message into chunks that fit Discord's character limit."""
-    if len(message_content) <= max_length:
-        return [message_content]
-    
-    chunks = []
-    while len(message_content) > 0:
-        if len(message_content) <= max_length:
-            chunks.append(message_content)
-            break
-        
-        # Try to find a natural break point (e.g., last newline or sentence end)
-        split_point = message_content[:max_length].rfind('\n')
-        if split_point == -1:
-            split_point = message_content[:max_length].rfind('. ')
-        if split_point == -1:
-            split_point = message_content[:max_length].rfind(' ')
-        
-        if split_point == -1 or split_point == 0: # No natural break, force split
-            split_point = max_length
-        
-        chunks.append(message_content[:split_point])
-        message_content = message_content[split_point:].lstrip() # Remove leading whitespace
-
-    return chunks
-
-
-async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, outputsize=None,
-                                       indicator=None, indicator_period=None, news_query=None,
-                                       from_date=None, sort_by=None, news_language=None):
-    """
-    Helper function to fetch data directly from Twelve Data API or NewsAPI.org.
-    Includes rate limiting and caching.
-    """
-    global last_twelve_data_call, last_news_api_call
-
-    cache_key = (data_type, symbol, interval, outputsize, indicator, indicator_period,
-                 news_query, from_date, sort_by, news_language)
-    current_time = time.time()
-
-    # --- Check Cache First ---
-    if cache_key in api_response_cache:
-        cached_data = api_response_cache[cache_key]
-        if (current_time - cached_data['timestamp']) < CACHE_DURATION:
-            print(f"Serving cached response for {data_type} request to data service.")
-            return cached_data['response_json']
-
-    # --- Rate Limiting ---
-    if data_type != 'news':
-        if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
-            time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
-            raise requests.exceptions.RequestException(
-                f"Rate limit hit for data service. Please wait {time_to_wait:.2f} seconds."
-            )
-    else: # data_type == 'news'
-        if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
-            time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
-            raise requests.exceptions.RequestException(
-                f"Rate limit hit for News API. Please wait {int(time_to_wait) + 1} seconds."
-            )
-
-
-    readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() if symbol else "N/A"
-    response_data = {} # To store the final JSON response
-
-    try:
-        if data_type == 'live':
-            if not symbol:
-                raise ValueError("Missing 'symbol' parameter for live price.")
-            api_url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_API_KEY}"
-            print(f"Fetching live price for {symbol} from data service...")
-            response = requests.get(api_url)
-            response.raise_for_status()
-            data = response.json()
-
-            if data.get('status') == 'error':
-                error_message = data.get('message', 'Unknown error from data service.')
-                raise requests.exceptions.RequestException(f"Data service error for symbol {symbol}: {error_message}")
-            
-            current_price = data.get('close')
-            if current_price is not None:
-                formatted_price = f"${float(current_price):,.2f}"
-                response_data = {"text": f"The current price of {readable_symbol} is {formatted_price}."}
-            else:
-                raise ValueError(f"Data service did not return a 'close' price for {symbol}. Response: {data}")
-
-        elif data_type == 'historical':
-            if not symbol:
-                raise ValueError("Missing 'symbol' parameter for historical data.")
-            
-            interval_str = interval if interval else '1day'
-            outputsize_str = outputsize if outputsize else '50'
-            
-            api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval_str}&outputsize={outputsize_str}&apikey={TWELVE_DATA_API_KEY}"
-            print(f"Fetching data for {symbol} (interval: {interval_str}, outputsize: {outputsize_str}) from data service...")
-            response = requests.get(api_url)
-            response.raise_for_status()
-            data = response.json()
-
-            if data.get('status') == 'error':
-                error_message = data.get('message', 'Unknown error from data service.')
-                raise requests.exceptions.RequestException(f"Data service error for symbol {symbol} historical data: {error_message}")
-            
-            historical_values = data.get('values')
-            if not historical_values:
-                raise ValueError(f"No data found for {symbol} with the specified interval and output size. Response: {data}")
-
-            response_data = {
-                "text": (
-                    f"I have retrieved {len(historical_values)} data points for {readable_symbol} "
-                    f"at {interval_str} intervals, covering from {historical_values[-1]['datetime']} to {historical_values[0]['datetime']}. "
-                    f"This data includes Open, High, Low, and Close prices."
-                )
-            }
-
-        elif data_type == 'indicator':
-            if not all([symbol, indicator]): # indicator_period can be defaulted
-                raise ValueError("Missing required parameters for indicator data (symbol, indicator).")
-            
-            indicator_name_upper = indicator.upper()
-            base_api_url = "https://api.twelvedata.com/"
-            indicator_endpoint = ""
-            params = {
-                'symbol': symbol,
-                'interval': interval if interval else '1day', # Default interval
-                'apikey': TWELVE_DATA_API_KEY
-            }
-            
-            # Default indicator_period if not provided by LLM
-            indicator_period_str = str(indicator_period) if indicator_period else '14' 
-
-            # Map indicator and period to Twelve Data API endpoints and parameters
-            if indicator_name_upper == 'RSI':
-                indicator_endpoint = "rsi"
-                params['time_period'] = indicator_period_str
-            elif indicator_name_upper == 'MACD':
-                indicator_endpoint = "macd"
-                params['fast_period'] = 12
-                params['slow_period'] = 26
-                params['signal_period'] = 9
-            elif indicator_name_upper == 'BBANDS':
-                indicator_endpoint = "bbands"
-                params['time_period'] = indicator_period_str
-                params['sd'] = 2 # Standard deviation, common default
-            elif indicator_name_upper == 'STOCHRSI':
-                indicator_endpoint = "stochrsi"
-                params['time_period'] = indicator_period_str
-                params['fast_k_period'] = 3
-                params['fast_d_period'] = 3
-                params['rsi_time_period'] = indicator_period_str
-                params['stoch_time_period'] = indicator_period_str
-            elif indicator_name_upper == 'SMA':
-                indicator_endpoint = "sma"
-                params['time_period'] = indicator_period_str
-            elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Treat MA as EMA
-                indicator_endpoint = "ema"
-                params['time_period'] = indicator_period_str
-            else:
-                raise ValueError(f"Indicator '{indicator}' not supported by direct API.")
-
-            api_url = f"{base_api_url}{indicator_endpoint}"
-            print(f"Fetching {indicator_name_upper} for {symbol} from data service with params: {params}...")
-            response = requests.get(api_url, params=params)
-            response.raise_for_status()
-            data = response.json()
-
-            if data.get('status') == 'error':
-                error_message = data.get('message', 'Unknown error from data service.')
-                raise requests.exceptions.RequestException(f"Data service error for {indicator_name_upper} for {symbol}: {error_message}")
-            
-            indicator_value = None
-            indicator_description = ""
-            
-            # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
-            if data.get('values') and len(data['values']) > 0:
-                latest_values = data['values'][0] # Get the most recent data point
-                print(f"DEBUG: {indicator_name_upper} - latest_values: {latest_values}") # Debugging print
-
-                if indicator_name_upper == 'RSI':
-                    value = latest_values.get('rsi')
-                    print(f"DEBUG: RSI - raw value: {value}, type: {type(value)}") # Debugging print
-                    if value is not None:
-                        try:
-                            indicator_value = float(str(value).replace(',', '')) # Ensure string before replace
-                            indicator_description = f"{indicator_period_str}-period Relative Strength Index"
-                        except ValueError as ve:
-                            print(f"DEBUG: ValueError during RSI float conversion: {ve} for value: '{value}'")
-                            indicator_value = None # Ensure it's None if conversion fails
-                elif indicator_name_upper == 'MACD':
-                    macd = latest_values.get('macd')
-                    signal = latest_values.get('signal')
-                    histogram = latest_values.get('histogram')
-                    print(f"DEBUG: MACD - raw macd: {macd}, signal: {signal}, histogram: {histogram}") # Debugging print
-                    if all(v is not None for v in [macd, signal, histogram]):
-                        try:
-                            indicator_value = {
-                                'MACD_Line': float(str(macd).replace(',', '')),
-                                'Signal_Line': float(str(signal).replace(',', '')),
-                                'Histogram': float(str(histogram).replace(',', ''))
-                            }
-                            indicator_description = "Moving Average Convergence D-I-vergence"
-                        except ValueError as ve:
-                            print(f"DEBUG: ValueError during MACD float conversion: {ve}")
-                            indicator_value = None
-                elif indicator_name_upper == 'BBANDS':
-                    upper = latest_values.get('upper')
-                    middle = latest_values.get('middle')
-                    lower = latest_values.get('lower')
-                    print(f"DEBUG: BBANDS - raw upper: {upper}, middle: {middle}, lower: {lower}") # Debugging print
-                    if all(v is not None for v in [upper, middle, lower]):
-                        try:
-                            indicator_value = {
-                                'Upper_Band': float(str(upper).replace(',', '')),
-                                'Middle_Band': float(str(middle).replace(',', '')),
-                                'Lower_Band': float(str(lower).replace(',', ''))
-                            }
-                            indicator_description = f"{indicator_period_str}-period Bollinger Bands"
-                        except ValueError as ve:
-                            print(f"DEBUG: ValueError during BBANDS float conversion: {ve}")
-                            indicator_value = None
-                elif indicator_name_upper == 'STOCHRSI':
-                    stochrsi_k = latest_values.get('stochrsi')
-                    stochrsi_d = latest_values.get('stochrsi_signal')
-                    print(f"DEBUG: STOCHRSI - raw K: {stochrsi_k}, D: {stochrsi_d}") # Debugging print
-                    if all(v is not None for v in [stochrsi_k, stochrsi_d]):
-                        try:
-                            indicator_value = {
-                                'StochRSI_K': float(str(stochrsi_k).replace(',', '')),
-                                'StochRSI_D': float(str(stochrsi_d).replace(',', ''))
-                            }
-                            indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
-                        except ValueError as ve:
-                            print(f"DEBUG: ValueError during STOCHRSI float conversion: {ve}")
-                            indicator_value = None
-                elif indicator_name_upper == 'SMA':
-                    value = latest_values.get('value')
-                    print(f"DEBUG: SMA - raw value: {value}") # Debugging print
-                    if value is not None:
-                        try:
-                            indicator_value = float(str(value).replace(',', ''))
-                            indicator_description = f"{indicator_period_str}-period Simple Moving Average"
-                        except ValueError as ve:
-                            print(f"DEBUG: ValueError during SMA float conversion: {ve}")
-                            indicator_value = None
-                elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA': # Assuming MA is EMA
-                    value = latest_values.get('value')
-                    print(f"DEBUG: EMA - raw value: {value}") # Debugging print
-                    if value is not None:
-                        try:
-                            indicator_value = float(str(value).replace(',', ''))
-                            indicator_description = f"{indicator_period_str}-period Exponential Moving Average"
-                        except ValueError as ve:
-                            print(f"DEBUG: ValueError during EMA float conversion: {ve}")
-                            indicator_value = None
-
-            if indicator_value is not None:
-                if isinstance(indicator_value, dict):
-                    response_text = f"The {indicator_description} for {readable_symbol} is: "
-                    for key, val in indicator_value.items():
-                        response_text += f"{key}: {val:,.2f}. "
-                    response_data = {"text": response_text.strip()}
-                else:
-                    response_data = {"text": f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."}
-            else:
-                raise ValueError(f"Data service did not return valid indicator values for {indicator_name_upper} for {symbol}. Raw latest_values: {latest_values}")
-
-        elif data_type == 'news':
-            # --- Rate Limiting for NewsAPI.org ---
-            if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
-                time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
-                raise requests.exceptions.RequestException(
-                    f"Rate limit hit for News API. Please wait {int(time_to_wait) + 1} seconds."
-                )
-
-            if not news_query:
-                raise ValueError("Missing 'news_query' parameter for news.")
-            
-            from_date_str = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-            sort_by_str = sort_by if sort_by else 'publishedAt'
-            news_language_str = news_language if news_language else 'en'
-
-            news_api_url = (
-                f"https://newsapi.org/v2/everything?"
-                f"q={news_query}&"
-                f"from={from_date_str}&"
-                f"sortBy={sort_by_str}&"
-                f"language={news_language_str}&"
-                f"apiKey={NEWS_API_KEY}" # Use NEWS_API_KEY directly
-            )
-            print(f"Fetching news for '{news_query}' from News API...")
-            response = requests.get(api_url)
-            response.raise_for_status()
-            news_data = response.json()
-
-            if news_data.get('status') == 'error':
-                error_message = news_data.get('message', 'Unknown error from News API.')
-                raise requests.exceptions.RequestException(f"News API error: {error_message}")
-            
-            articles = news_data.get('articles')
-            if articles:
-                response_text = f"Here are some recent news headlines for {news_query}: "
-                for i, article in enumerate(articles[:3]):
-                    title = article.get('title', 'No title')
-                    source = article.get('source', {}).get('name', 'Unknown source')
-                    response_text += f"Number {i+1}: '{title}' from {source}. "
-                response_data = {"text": response_text.strip()}
-            else:
-                response_data = {"text": f"No recent news found for '{news_query}'."}
-        else:
-            raise ValueError("Invalid 'data_type' specified.")
-
-    except requests.exceptions.RequestException as e:
-        raise e # Re-raise for outer try-except to catch
-    except ValueError as e:
-        raise e # Re-raise for outer try-except to catch
-    finally:
-        # Update last_twelve_data_call only if it was a Twelve Data call
-        if data_type != 'news':
-            globals()['last_twelve_data_call'] = time.time()
-        else: # Update last_news_api_call for news type
-            globals()['last_news_api_call'] = time.time()
-    
-    api_response_cache[cache_key] = {'response_json': response_data, 'timestamp': time.time()}
-    return response_data
-
+@client.event
+async def on_ready():
+    """Event that fires when the bot successfully connects to Discord."""
+    print(f'Logged in as {client.user} (ID: {client.user.id})')
+    print('------')
 
 @client.event
 async def on_message(message):
     """Event that fires when a message is sent in a channel the bot can see."""
+    # Ignore messages from the bot itself to prevent infinite loops
     if message.author == client.user:
         return
- # --- NEW: Check if message is a DM and from a specific user ID ---
-    AUTHORIZED_USER_IDS = ["918556208217067561", "YOUR_FRIEND_DISCORD_ID_2"] # Replace with actual IDs
-    if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in AUTHORIZED_USER_IDS:
-        print(f"Ignoring DM from unauthorized user: {message.author.id}")
-        return
-    # --- END NEW ---
-    user_id = str(message.author.id)
-    user_query = message.content.strip()
-    print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
 
-    if user_id not in conversation_histories:
-        conversation_histories[user_id] = []
-    
-    conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
-    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+    user_query = message.content.strip()
+    print(f"Received message: '{user_query}' from {message.author}")
+
+    # Initialize chat history for the LLM
+    chat_history = []
+    chat_history.append({"role": "user", "parts": [{"text": user_query}]})
 
     response_text_for_discord = "I'm currently unavailable. Please try again later."
 
     try:
         # --- Define the market_data tool for the LLM ---
+        # This tells the LLM about your Flask webhook and its parameters
         tools = [
             {
                 "functionDeclarations": [
@@ -395,28 +55,60 @@ async def on_message(message):
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." },
-                                "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch (live, historical, indicator, news). This is required." },
-                                "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
-                                "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
-                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"], "description": "Name of the technical indicator. Required if data_type is 'indicator'." },
-                                "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD." },
-                                "news_query": { "type": "string", "description": "Keywords for news search." },
-                                "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
-                                "sort_by": { "type": "string", "enum": ["relevancy", "popularity", "publishedAt"], "description": "How to sort news." },
-                                "news_language": { "type": "string", "description": "Language of news." }
+                                "symbol": {
+                                    "type": "string",
+                                    "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL') for price/TA. Required for 'live', 'historical', 'indicator' data types."
+                                },
+                                "data_type": {
+                                    "type": "string",
+                                    "enum": ["live", "historical", "indicator", "news"],
+                                    "description": "Type of data to fetch: 'live', 'historical', 'indicator', or 'news'. Defaults to 'live'."
+                                },
+                                "interval": {
+                                    "type": "string",
+                                    "description": "Time interval (e.g., '1min', '1day'). Required for 'historical' or 'indicator' data. Defaults to '1day'."
+                                },
+                                "outputsize": {
+                                    "type": "string",
+                                    "description": "Number of data points to retrieve. Defaults to '50' for historical, adjusted for indicator. Should be a whole number string."
+                                },
+                                "indicator": {
+                                    "type": "string",
+                                    "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI"],
+                                    "description": "Name of the technical indicator (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'BBANDS', 'STOCHRSI'). Required if 'data_type' is 'indicator'."
+                                },
+                                "indicator_period": {
+                                    "type": "string",
+                                    "description": "Period for the indicator (e.g., '14', '20', '50'). Required if 'indicator' is specified. Should be a whole number string."
+                                },
+                                "news_query": {
+                                    "type": "string",
+                                    "description": "Keywords for news search. Required if 'data_type' is 'news'."
+                                },
+                                "from_date": {
+                                    "type": "string",
+                                    "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago."
+                                },
+                                "sort_by": {
+                                    "type": "string",
+                                    "enum": ["relevancy", "popularity", "publishedAt"],
+                                    "description": "How to sort news ('relevancy', 'popularity', 'publishedAt'). Defaults to 'publishedAt'."
+                                },
+                                "news_language": {
+                                    "type": "string",
+                                    "description": "Language of news (e.g., 'en'). Defaults to 'en'."
+                                }
                             },
-                            "required": ["symbol", "data_type"] # Explicitly make these required
+                            "required": [] # LLM will infer required based on data_type
                         }
                     }
                 ]
             }
         ]
 
-        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
-        
-        llm_payload_first_turn = {
-            "contents": current_chat_history,
+        # Make a request to the Gemini LLM with tool definitions
+        llm_payload = {
+            "contents": chat_history,
             "tools": tools,
             "safetySettings": [
                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -426,129 +118,66 @@ async def on_message(message):
             ]
         }
 
-        try:
-            llm_response_first_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_first_turn)
-            llm_response_first_turn.raise_for_status()
-            llm_data_first_turn = llm_response_first_turn.json()
-        except requests.exceptions.RequestException as e:
-            print(f"Error connecting to Gemini LLM (first turn): {e}")
-            response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
-            # Ensure response is sent even on LLM connection error
-            for chunk in split_message(response_text_for_discord):
-                await message.channel.send(chunk)
-            return
+        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
+        llm_response = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload)
+        llm_response.raise_for_status()
+        llm_data = llm_response.json()
 
-        if llm_data_first_turn and llm_data_first_turn.get('candidates'):
-            candidate_first_turn = llm_data_first_turn['candidates'][0]
-            # Ensure content and parts exist before accessing
-            if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
-                parts_first_turn = candidate_first_turn['content']['parts']
-                if parts_first_turn: # Check if parts list is not empty
-                    if parts_first_turn[0].get('functionCall'):
-                        function_call = parts_first_turn[0]['functionCall']
-                        function_name = function_call['name']
-                        function_args = function_call['args']
+        # Check for LLM candidates and content
+        if llm_data and llm_data.get('candidates'):
+            candidate = llm_data['candidates'][0]
+            if candidate.get('content') and candidate['content'].get('parts'):
+                parts = candidate['content']['parts']
 
-                        if function_name == "get_market_data":
+                # --- Handle LLM's response (text or tool_calls) ---
+                if parts[0].get('functionCall'):
+                    function_call = parts[0]['functionCall']
+                    function_name = function_call['name']
+                    function_args = function_call['args']
+
+                    if function_name == "get_market_data":
+                        if FLASK_WEBHOOK_URL:
                             print(f"LLM requested tool call: get_market_data with args: {function_args}")
-                            current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
-
-                            # --- Pre-populate missing args with defaults before calling helper ---
-                            if 'interval' not in function_args:
-                                function_args['interval'] = '1day'
-                            if 'indicator_period' not in function_args:
-                                if function_args.get('indicator', '').upper() == 'MACD':
-                                    function_args['indicator_period'] = '0'
-                                else:
-                                    function_args['indicator_period'] = '14'
-                            
-                            for key, value in function_args.items():
-                                function_args[key] = str(value)
-
-
-                            try:
-                                tool_output_data = await _fetch_data_from_twelve_data(**function_args)
-                                tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
-                                print(f"Tool execution output: {tool_output_text}")
-                            except requests.exceptions.RequestException as e:
-                                print(f"Error fetching data from data service via local helper: {e}")
-                                tool_output_text = f"Error fetching data: {e}"
-                            except ValueError as e:
-                                print(f"Invalid parameters for data fetch: {e}")
-                                tool_output_text = f"Invalid parameters: {e}"
-                            except Exception as e:
-                                print(f"Unexpected error during data fetch: {e}")
-                                tool_output_text = f"An unexpected error occurred: {e}"
-                            
-                            current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
-
-                            llm_payload_second_turn = {
-                                "contents": current_chat_history,
-                                "tools": tools,
-                                "safetySettings": [
-                                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                                ]
-                            }
-                            try:
-                                llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
-                                llm_response_second_turn.raise_for_status()
-                                llm_data_second_turn = llm_response_second_turn.json()
-                            except requests.exceptions.RequestException as e:
-                                print(f"Error connecting to AI brain (second turn after tool): {e}")
-                                response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
-                                for chunk in split_message(response_text_for_discord):
-                                    await message.channel.send(chunk)
-                                return
-
-                            if llm_data_second_turn and llm_data_second_turn.get('candidates'):
-                                final_candidate = llm_data_second_turn['candidates'][0]
-                                if final_candidate.get('content') and final_candidate['content'].get('parts'):
-                                    response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
-                                else:
-                                    print(f"LLM second turn: No text content in response. Full response: {llm_data_second_turn}")
-                                    block_reason = llm_data_second_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
-                                    response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
-                            else:
-                                response_text_for_discord = "Could not get a valid second response from the AI."
+                            # Make the request to your Flask webhook
+                            webhook_response = requests.get(FLASK_WEBHOOK_URL, params=function_args)
+                            webhook_response.raise_for_status()
+                            data = webhook_response.json()
+                            response_text_for_discord = data.get('text', 'No specific response from market data agent.')
                         else:
-                            response_text_for_discord = "AI requested an unknown function."
-                    elif parts_first_turn[0].get('text'):
-                        response_text_for_discord = parts_first_turn[0]['text']
+                            response_text_for_discord = "Error: Flask webhook URL is not configured."
                     else:
-                        print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
-                        block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
-                        response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
+                        response_text_for_discord = "LLM requested an unknown function."
+
+                elif parts[0].get('text'):
+                    # LLM generated a direct text response
+                    response_text_for_discord = parts[0]['text']
                 else:
-                    response_text_for_discord = "AI did not provide content in its response."
+                    response_text_for_discord = "LLM response format not recognized."
             else:
-                response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-                if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
-                    response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
-            
-            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+                response_text_for_discord = "LLM did not provide content in its response."
+        else:
+            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
+            if llm_data.get('promptFeedback') and llm_data['promptFeedback'].get('blockReason'):
+                response_text_for_discord += f" (Blocked: {llm_data['promptFeedback']['blockReason']})"
 
 
     except requests.exceptions.RequestException as e:
-        print(f"General Request Error: {e}")
-        response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
+        print(f"Error connecting to LLM or Flask webhook: {e}")
+        response_text_for_discord = "I'm having trouble connecting to my AI brain or data service. Please try again later."
     except Exception as e:
         print(f"An unexpected error occurred in bot logic: {e}")
-        response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
+        response_text_for_discord = "An unexpected error occurred while processing your request. My apologies."
 
-    # Split and send the response to Discord
-    for chunk in split_message(response_text_for_discord):
-        await message.channel.send(chunk)
+    # Send the response back to the Discord channel
+    await message.channel.send(response_text_for_discord)
 
+# Run the bot
 if __name__ == '__main__':
     if not DISCORD_BOT_TOKEN:
         print("Error: DISCORD_BOT_TOKEN environment variable not set.")
-    elif not TWELVE_DATA_API_KEY:
-        print("Error: TWELVE_DATA_API_KEY environment variable not set.")
+    elif not FLASK_WEBHOOK_URL:
+        print("Error: FLASK_WEBHOOK_URL environment variable not set.")
     elif not GOOGLE_API_KEY:
         print("Error: GOOGLE_API_KEY environment variable not set.")
     else:
         client.run(DISCORD_BOT_TOKEN)
-
