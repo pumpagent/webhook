@@ -608,8 +608,12 @@ async def on_message(message):
                             "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
                         },
                         "required": ["symbol", "data_type"]
-                  
-                        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
+                    }
+                ]
+            }
+        ]
+
+        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
         
         llm_payload = {
             "contents": current_chat_history,
