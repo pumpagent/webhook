@@ -535,8 +535,11 @@ async def on_message(message):
         print(f"Ignoring message from unauthorized user: {user_id}")
         return
     
-    # --- NEW: Check for simple, direct requests first ---
-    query_lower = message.content.strip().lower()
+    user_query = message.content.strip()
+    print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
+    
+    # --- Check for simple, direct requests first ---
+    query_lower = user_query.lower()
     
     # Check for price queries
     price_match = re.match(r'^(price of|price)\s+([a-zA-Z0-9\/]+)\s*$', query_lower)
@@ -664,7 +667,7 @@ async def on_message(message):
                                 for key, value in function_args.items(): function_args[key] = str(value)
                                 
                                 try:
-                                    tool_output_data = await _fetch_data_from_twelvedata(**function_args)
+                                    tool_output_data = await _fetch_data_from_twelve_data(**function_args)
                                     response_text_for_discord = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + tool_output_data.get('text', 'No response.')
                                 except Exception as e:
                                     print(f"Error fetching data from data service via local helper: {e}")
