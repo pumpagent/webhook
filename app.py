@@ -22,7 +22,7 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL =  # seconds (e.g., 10 seconds between API calls)
+TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
 NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
 api_response_cache = {}
@@ -36,7 +36,7 @@ MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memo
 # Messages from users NOT in this list will be ignored.
 # You can get your Discord User ID by enabling Developer Mode (User Settings -> Advanced)
 # then right-clicking your username and selecting "Copy ID".
-AUTHORIZED_USER_IDS = ["918556208217067561", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
+AUTHORIZED_USER_IDS = ["1396459069874634753", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
 
 # Discord message character limit
 DISCORD_MESSAGE_MAX_LENGTH = 2000
@@ -526,6 +526,7 @@ async def _perform_sentiment_analysis(symbol, interval_str):
 
     # Formulate final response directly, without a second LLM call
     combined_analysis_text = (
+        "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n"
         f"Overall Outlook for {symbol} ({interval_str}): **{overall_sentiment}**\n\n"
         f"Individual Indicator Assessments:\n"
         + "\n".join(analysis_results)
@@ -546,6 +547,26 @@ async def on_message(message):
 
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
+
+    # NEW: Check for simple, direct requests first
+    if user_query.lower().startswith('price of'):
+        symbol = user_query.lower().replace('price of', '').strip().upper()
+        if not symbol:
+            await message.channel.send("Please specify a symbol to get the price of. (e.g., 'price of btc/usd')")
+            return
+        
+        try:
+            live_price_data = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
+            response_text = live_price_data.get('text', 'Could not retrieve price.')
+            final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
+            for chunk in split_message(final_response):
+                await message.channel.send(chunk)
+            return
+        except Exception as e:
+            print(f"Error fetching live price for {symbol}: {e}")
+            await message.channel.send(f"An error occurred while fetching the price for {symbol}. Error: {e}")
+            return
+
 
     if user_id not in conversation_histories:
         conversation_histories[user_id] = []
@@ -625,115 +646,80 @@ async def on_message(message):
 
                         if function_name == "get_market_data":
                             print(f"LLM requested tool call: get_market_data with args: {function_args}")
-                            current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
-
-                            if function_args.get('data_type') == 'indicator' and not function_args.get('indicator'):
-                                symbol_for_analysis = function_args.get('symbol')
-                                interval_for_analysis = function_args.get('interval', '1day')
-                                if symbol_for_analysis:
-                                    # Perform local analysis and format a direct response
-                                    analysis_text = await _perform_sentiment_analysis(symbol_for_analysis, interval_for_analysis)
-                                    # Add the disclaimer locally, directly to the final message
-                                    response_text_for_discord = (
-                                        "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n"
-                                        + analysis_text
-                                    )
-                                    # This is the final response, no second LLM call needed
-                                else:
-                                    response_text_for_discord = "Please specify a symbol for analysis."
-                            else: # Standard tool call for specific data or news
-                                if 'interval' not in function_args:
-                                    function_args['interval'] = '1day'
-                                if 'indicator_period' not in function_args:
-                                    if function_args.get('indicator', '').upper() == 'MACD':
-                                        function_args['indicator_period'] = '0'
-                                    else:
-                                        function_args['indicator_period'] = '14'
-                                
-                                for key, value in function_args.items():
-                                    function_args[key] = str(value)
-
-                                try:
-                                    tool_output_data = await _fetch_data_from_twelve_data(**function_args)
-                                    tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
-                                    print(f"Tool execution output: {tool_output_text}")
-                                except requests.exceptions.RequestException as e:
-                                    print(f"Error fetching data from data service via local helper: {e}")
-                                    tool_output_text = f"Error fetching data: {e}"
-                                except ValueError as e:
-                                    print(f"Invalid parameters for data fetch: {e}")
-                                    tool_output_text = f"Invalid parameters: {e}"
-                                except Exception as e:
-                                    print(f"Unexpected error during data fetch: {e}")
-                                    tool_output_text = f"An unexpected error occurred: {e}"
                             
-                                current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
-                                
-                                # This is the original second LLM call for conversational responses
-                                llm_payload_second_turn = {
-                                    "contents": current_chat_history,
-                                    "tools": tools,
-                                    "safetySettings": [
-                                        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                                        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                                    ]
-                                }
-                                system_instruction_text = (
-                                    "You are a technical analysis bot named Pump. "
-                                    "Always start your response with: 'Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.' "
-                                    "Then, based on the provided data or tool output, provide a concise and direct answer to the user's query. "
-                                    "Do not ask follow-up questions unless absolutely necessary due to missing critical information."
-                                )
-                                llm_payload_second_turn["contents"].insert(0, {"role": "system", "parts": [{"text": system_instruction_text}]})
-                                
-                                try:
-                                    llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
-                                    llm_response_second_turn.raise_for_status()
-                                    llm_data_second_turn = llm_response_second_turn.json()
-                                except requests.exceptions.RequestException as e:
-                                    print(f"Error connecting to AI brain (second turn after tool): {e}")
-                                    response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
-                                    for chunk in split_message(response_text_for_discord):
-                                        await message.channel.send(chunk)
-                                    return
-
-                                if llm_data_second_turn and llm_data_second_turn.get('candidates'):
-                                    final_candidate = llm_data_second_turn['candidates'][0]
-                                    if final_candidate.get('content') and final_candidate['content'].get('parts'):
-                                        response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
-                                    else:
-                                        print(f"LLM second turn: No text content in response. Full response: {llm_data_second_turn}")
-                                        block_reason = llm_data_second_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
-                                        response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
+                            # Pre-populate missing args with defaults before calling helper
+                            if 'interval' not in function_args:
+                                function_args['interval'] = '1day'
+                            if 'indicator_period' not in function_args:
+                                if function_args.get('indicator', '').upper() == 'MACD':
+                                    function_args['indicator_period'] = '0'
                                 else:
-                                    response_text_for_discord = "Could not get a valid second response from the AI."
+                                    function_args['indicator_period'] = '14'
+                            
+                            for key, value in function_args.items():
+                                function_args[key] = str(value)
 
+                            try:
+                                tool_output_data = await _fetch_data_from_twelve_data(**function_args)
+                                tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
+                                print(f"Tool execution output: {tool_output_text}")
+                            except requests.exceptions.RequestException as e:
+                                print(f"Error fetching data from data service via local helper: {e}")
+                                response_text_for_discord = f"I'm having trouble fetching data from the API. Error: {e}"
+                                for chunk in split_message(response_text_for_discord):
+                                    await message.channel.send(chunk)
+                                return
+                            except ValueError as e:
+                                print(f"Invalid parameters for data fetch: {e}")
+                                response_text_for_discord = f"An error occurred with the parameters provided. Error: {e}"
+                                for chunk in split_message(response_text_for_discord):
+                                    await message.channel.send(chunk)
+                                return
+                            except Exception as e:
+                                print(f"Unexpected error during data fetch: {e}")
+                                response_text_for_discord = f"An unexpected error occurred: {e}"
+                                for chunk in split_message(response_text_for_discord):
+                                    await message.channel.send(chunk)
+                                return
+                            
+                            # --- Use the tool output to construct a simple final response ---
+                            response_text_for_discord = (
+                                "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n"
+                                + tool_output_text
+                            )
+                            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+                            
                         else:
                             response_text_for_discord = "AI requested an unknown function."
                     elif parts_first_turn[0].get('text'):
                         response_text_for_discord = parts_first_turn[0]['text']
+                        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
                     else:
                         print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
                         block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
                         response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
+                        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+
                 else:
                     response_text_for_discord = "AI did not provide content in its response."
+                    conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
             else:
                 response_text_for_discord = "Could not get a valid response from the AI. Please try again."
                 if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
                     response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
-            
-            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+                conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
 
 
     except requests.exceptions.RequestException as e:
         print(f"General Request Error: {e}")
         response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
+        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
     except Exception as e:
-        print(f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
-)
+        print(f"An unexpected error occurred in bot logic: {e}")
+        response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
+        conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+
+
     # Split and send the response to Discord
     for chunk in split_message(response_text_for_discord):
         await message.channel.send(chunk)
@@ -747,3 +733,5 @@ if __name__ == '__main__':
         print("Error: GOOGLE_API_KEY environment variable not set.")
     else:
         client.run(DISCORD_BOT_TOKEN)
+```
+
