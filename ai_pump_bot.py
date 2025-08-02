@@ -22,9 +22,9 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between API calls)
+TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
-NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
+NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
 api_response_cache = {}
 CACHE_DURATION = 10 # Cache responses for 10 seconds
 
@@ -36,7 +36,7 @@ MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memo
 # Messages from users NOT in this list will be ignored.
 # You can get your Discord User ID by enabling Developer Mode (User Settings -> Advanced)
 # then right-clicking your username and selecting "Copy ID".
-AUTHORIZED_USER_IDS = ["918556208217067561", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
+AUTHORIZED_USER_IDS = ["YOUR_DISCORD_USER_ID_HERE", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
 
 # Discord message character limit
 DISCORD_MESSAGE_MAX_LENGTH = 2000
@@ -543,7 +543,11 @@ async def on_message(message):
     if AUTHORIZED_USER_IDS and str(user_id) not in AUTHORIZED_USER_IDS:
         print(f"Ignoring message from unauthorized user: {user_id}")
         return
-
+    
+    # --- FIX: Ensure conversation_histories is initialized for new users ---
+    if user_id not in conversation_histories:
+        conversation_histories[user_id] = []
+    
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
 
@@ -622,8 +626,6 @@ async def on_message(message):
                                 "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD. For SUPERTREND, this can be 'time_period,factor' (e.g., '10,3')." },
                                 "news_query": { "type": "string", "description": "Keywords for news search." },
                                 "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
-                                "sort_by": { "type": "string", "enum": ["relevancy", "popularity", "publishedAt"], "description": "How to sort news." },
-                                "news_language": { "type": "string", "description": "Language of news." }
                             },
                             "required": ["symbol", "data_type"]
                         }
@@ -669,17 +671,12 @@ async def on_message(message):
                         if function_name == "get_market_data":
                             print(f"LLM requested tool call: get_market_data with args: {function_args}")
                             
-                            # --- Handle general analysis vs. specific indicator requests from LLM ---
                             if function_args.get('data_type') == 'indicator' and not function_args.get('indicator'):
                                 symbol_for_analysis = function_args.get('symbol')
-                                interval_for_analysis = function_args.get('interval', '1day') # Use default if not provided
+                                interval_for_analysis = function_args.get('interval', '1day')
                                 if symbol_for_analysis:
                                     analysis_text = await _perform_sentiment_analysis(symbol_for_analysis, interval_for_analysis)
-                                    # Add the disclaimer locally, directly to the final message
-                                    response_text_for_discord = (
-                                        "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n"
-                                        + analysis_text
-                                    )
+                                    response_text_for_discord = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + analysis_text
                                 else:
                                     response_text_for_discord = "Please specify a symbol for analysis."
                             else: # Standard tool call for specific data or news
@@ -710,12 +707,7 @@ async def on_message(message):
                 response_text_for_discord = "Could not get a valid response from the AI. Please try again."
                 if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
                     response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
-            
-            # Since we have no memory, append the full interaction to history
-            conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
-            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
-
-
+    
     except Exception as e:
         print(f"An unexpected error occurred in bot logic: {e}")
         response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
