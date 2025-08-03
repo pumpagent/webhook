@@ -538,8 +538,6 @@ async def on_message(message):
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
     
-    response_text_for_discord = "I'm currently unavailable. Please try again later."
-    
     try:
         query_lower = user_query.lower()
         
@@ -609,7 +607,6 @@ async def on_message(message):
                                 "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
                                 "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
                                 "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI", "VWAP", "SUPERTREND"], "description": "Name of the technical indicator. Required if data_type is 'indicator' AND a specific indicator is requested by the user." },
-                                "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD. For SUPERTREND, this can be 'time_period,factor' (e.g., '10,3')." },
                             },
                             "required": ["symbol", "data_type"]
                         }
