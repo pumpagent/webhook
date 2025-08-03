@@ -36,7 +36,7 @@ MAX_CONVERSATION_TURNS = 10 # Keep last 10 turns (user + model/function) in memo
 # Messages from users NOT in this list will be ignored.
 # You can get your Discord User ID by enabling Developer Mode (User Settings -> Advanced)
 # then right-clicking your username and selecting "Copy ID".
-AUTHORIZED_USER_IDS = ["918556208217067561", "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
+AUTHORIZED_USER_IDS = ["918556208217067561, "ANOTHER_FRIEND_ID_HERE"] # <<< IMPORTANT: REPLACE WITH ACTUAL IDs >>>
 
 # Discord message character limit
 DISCORD_MESSAGE_MAX_LENGTH = 2000
@@ -538,78 +538,81 @@ async def on_message(message):
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
     
-    # NEW: Check for simple, direct requests first
-    query_lower = user_query.lower()
+    response_text_for_discord = "I'm currently unavailable. Please try again later."
     
-    # Check for price queries
-    price_match = re.match(r'^(price of|price)\s+([a-zA-Z0-9\/]+)\s*$', query_lower)
-    if price_match:
-        symbol = price_match.group(2).upper()
-        if '/' not in symbol and len(symbol) <= 4:
-            symbol += '/USD'
-        try:
-            live_price_data = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
-            response_text = live_price_data.get('text', 'Could not retrieve price.')
-            final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
-            for chunk in split_message(final_response):
-                await message.channel.send(chunk)
-            return
-        except Exception as e:
-            print(f"Error fetching live price for {symbol}: {e}")
-            await message.channel.send(f"An error occurred while fetching the price for {symbol}. Error: {e}")
-            return
-
-    # Check for direct indicator queries
-    indicator_match = re.match(r'^([a-zA-Z0-9\/]+)\s+(rsi|macd|bbands|stochrsi|vwap|supertrend|ema|sma|ma)\s*$', query_lower)
-    if indicator_match:
-        symbol = indicator_match.group(1).upper()
-        indicator_name = indicator_match.group(2).upper()
-        if '/' not in symbol and len(symbol) <= 4:
-            symbol += '/USD'
+    try:
+        query_lower = user_query.lower()
         
-        try:
-            indicator_data = await _fetch_data_from_twelve_data(
-                data_type='indicator',
-                symbol=symbol,
-                indicator=indicator_name,
-                indicator_period='14',
-                interval='1day'
-            )
-            response_text = indicator_data.get('text', 'No indicator data available.')
-            final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
-            for chunk in split_message(final_response):
-                await message.channel.send(chunk)
-            return
-        except Exception as e:
-            print(f"Error fetching indicator {indicator_name} for {symbol}: {e}")
-            await message.channel.send(f"An error occurred while fetching the indicator {indicator_name} for {symbol}. Error: {e}")
-            return
-    
-    # --- For general, conversational queries, use the LLM (single turn) ---
-    current_chat_history = [{"role": "user", "parts": [{"text": user_query}]}]
+        # Check for price queries
+        price_match = re.match(r'^(price of|price)\s+([a-zA-Z0-9\/]+)\s*$', query_lower)
+        if price_match:
+            symbol = price_match.group(2).upper()
+            if '/' not in symbol and len(symbol) <= 4:
+                symbol += '/USD'
+            try:
+                live_price_data = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
+                response_text = live_price_data.get('text', 'Could not retrieve price.')
+                final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
+                for chunk in split_message(final_response):
+                    await message.channel.send(chunk)
+                return
+            except Exception as e:
+                print(f"Error fetching live price for {symbol}: {e}")
+                await message.channel.send(f"An error occurred while fetching the price for {symbol}. Error: {e}")
+                return
 
-    tools = [
-        {
-            "functionDeclarations": [
-                {
-                    "name": "get_market_data",
-                    "description": (
-                        "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query. "
-                        "If the user asks for a general outlook, sentiment, or bullish/bearish assessment for a symbol (e.g., 'Is BTC bullish?', 'Outlook for ETH?', 'Sentiment for SOL?'), "
-                        "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter**. "
-                        "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD)."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." },
-                            "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch (live, historical, indicator, news). This is required." },
-                            "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
-                            "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
-                            "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI", "VWAP", "SUPERTREND"], "description": "Name of the technical indicator. Required if data_type is 'indicator' AND a specific indicator is requested by the user." },
-                            "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD. For SUPERTREND, this can be 'time_period,factor' (e.g., '10,3')." },
-                        },
-                        "required": ["symbol", "data_type"]
+        # Check for direct indicator queries
+        indicator_match = re.match(r'^([a-zA-Z0-9\/]+)\s+(rsi|macd|bbands|stochrsi|vwap|supertrend|ema|sma|ma)\s*$', query_lower)
+        if indicator_match:
+            symbol = indicator_match.group(1).upper()
+            indicator_name = indicator_match.group(2).upper()
+            if '/' not in symbol and len(symbol) <= 4:
+                symbol += '/USD'
+            
+            try:
+                indicator_data = await _fetch_data_from_twelve_data(
+                    data_type='indicator',
+                    symbol=symbol,
+                    indicator=indicator_name,
+                    indicator_period='14',
+                    interval='1day'
+                )
+                response_text = indicator_data.get('text', 'No indicator data available.')
+                final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
+                for chunk in split_message(final_response):
+                    await message.channel.send(chunk)
+                return
+            except Exception as e:
+                print(f"Error fetching indicator {indicator_name} for {symbol}: {e}")
+                await message.channel.send(f"An error occurred while fetching the indicator {indicator_name} for {symbol}. Error: {e}")
+                return
+        
+        # --- For general, conversational queries, use the LLM (single turn) ---
+        current_chat_history = [{"role": "user", "parts": [{"text": user_query}]}]
+
+        tools = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "get_market_data",
+                        "description": (
+                            "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query. "
+                            "If the user asks for a general outlook, sentiment, or bullish/bearish assessment for a symbol (e.g., 'Is BTC bullish?', 'Outlook for ETH?', 'Sentiment for SOL?'), "
+                            "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter**. "
+                            "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD)."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." },
+                                "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch (live, historical, indicator, news). This is required." },
+                                "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
+                                "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
+                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI", "VWAP", "SUPERTREND"], "description": "Name of the technical indicator. Required if data_type is 'indicator' AND a specific indicator is requested by the user." },
+                                "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. MACD typically uses fixed periods (12, 26, 9) so '0' can be used as a placeholder if period is not relevant for MACD. For SUPERTREND, this can be 'time_period,factor' (e.g., '10,3')." },
+                            },
+                            "required": ["symbol", "data_type"]
+                        }
                     }
                 ]
             }
