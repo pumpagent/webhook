@@ -22,9 +22,9 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between API calls)
+TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
-NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
+NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
 api_response_cache = {}
 CACHE_DURATION = 10 # Cache responses for 10 seconds
 
@@ -547,7 +547,14 @@ async def on_message(message):
     
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
+
+    # --- FIX: Ensure conversation_histories is initialized for new users ---
+    if user_id not in conversation_histories:
+        conversation_histories[user_id] = []
     
+    conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
+    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+
     response_text_for_discord = "I'm currently unavailable. Please try again later."
     
     try:
@@ -565,10 +572,15 @@ async def on_message(message):
                 final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
                 for chunk in split_message(final_response):
                     await message.channel.send(chunk)
+                conversation_histories[user_id].append({"role": "model", "parts": [{"text": final_response}]})
                 return
             except Exception as e:
                 print(f"Error fetching live price for {symbol}: {e}")
-                await message.channel.send(f"An error occurred while fetching the price for {symbol}. Error: {e}")
+                error_response = f"An error occurred while fetching the price for {symbol}. Error: {e}"
+                final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + error_response
+                for chunk in split_message(final_response):
+                    await message.channel.send(chunk)
+                conversation_histories[user_id].append({"role": "model", "parts": [{"text": final_response}]})
                 return
 
         # Check for direct indicator queries
@@ -591,15 +603,18 @@ async def on_message(message):
                 final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + response_text
                 for chunk in split_message(final_response):
                     await message.channel.send(chunk)
+                conversation_histories[user_id].append({"role": "model", "parts": [{"text": final_response}]})
                 return
             except Exception as e:
                 print(f"Error fetching indicator {indicator_name} for {symbol}: {e}")
-                await message.channel.send(f"An error occurred while processing your request. Error: {e}")
+                error_response = f"An error occurred while processing your request. Error: {e}"
+                final_response = "Disclaimer: This information is for informational purposes only and does not constitute financial advice. Always conduct your own research before making investment decisions.\n\n" + error_response
+                for chunk in split_message(final_response):
+                    await message.channel.send(chunk)
+                conversation_histories[user_id].append({"role": "model", "parts": [{"text": final_response}]})
                 return
         
         # --- For general, conversational queries, use the LLM (single turn) ---
-        current_chat_history = [{"role": "user", "parts": [{"text": user_query}]}]
-
         tools = [
             {
                 "functionDeclarations": [
@@ -646,9 +661,10 @@ async def on_message(message):
             llm_data = llm_response.json()
         except requests.exceptions.RequestException as e:
             print(f"Error connecting to Gemini LLM: {e}")
-            response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
+            response_text_for_discord = f"An error occurred with my AI brain. Error: {e}"
             for chunk in split_message(response_text_for_discord):
                 await message.channel.send(chunk)
+            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
             return
 
         if llm_data and llm_data.get('candidates'):
@@ -664,47 +680,44 @@ async def on_message(message):
                         if function_name == "get_market_data":
                             print(f"LLM requested tool call: get_market_data with args: {function_args}")
                             
-                            if function_args.get('data_type') == 'indicator' and not function_args.get('indicator'):
-                                symbol_for_analysis = function_args.get('symbol')
-                                if symbol_for_analysis and '/' not in symbol_for_analysis and len(symbol_for_analysis) <= 4:
-                                    symbol_for_analysis += '/USD'
-                                interval_for_analysis = function_args.get('interval', '1day')
-                                if symbol_for_analysis:
-                                    analysis_text = await _perform_sentiment_analysis(symbol_for_analysis, interval_for_analysis)
+                            # Pre-populate missing args with defaults before calling helper
+                            if 'interval' not in function_args: function_args['interval'] = '1day'
+                            if 'indicator_period' not in function_args:
+                                if function_args.get('indicator', '').upper() == 'MACD': function_args['indicator_period'] = '0'
+                                else: function_args['indicator_period'] = '14'
+                            
+                            symbol = function_args.get('symbol')
+                            if symbol and '/' not in symbol and len(symbol) <= 4:
+                                function_args['symbol'] += '/USD'
+                                
+                            for key, value in function_args.items(): function_args[key] = str(value)
+                            
+                            try:
+                                if function_args.get('data_type') == 'indicator' and not function_args.get('indicator'):
+                                    analysis_text = await _perform_sentiment_analysis(function_args['symbol'], function_args['interval'])
                                     response_text_for_discord = analysis_text
-                                else:
-                                    response_text_for_discord = "Please specify a symbol for analysis."
-                            else: # Standard tool call for specific data or news
-                                symbol = function_args.get('symbol')
-                                if symbol and '/' not in symbol and len(symbol) <= 4:
-                                    function_args['symbol'] += '/USD'
-                                if 'interval' not in function_args: function_args['interval'] = '1day'
-                                if 'indicator_period' not in function_args:
-                                    if function_args.get('indicator', '').upper() == 'MACD': function_args['indicator_period'] = '0'
-                                    else: function_args['indicator_period'] = '14'
-                                
-                                for key, value in function_args.items(): function_args[key] = str(value)
-                                
-                                try:
+                                else: # Standard tool call for specific data or news
                                     tool_output_data = await _fetch_data_from_twelve_data(**function_args)
                                     response_text_for_discord = tool_output_data.get('text', 'No response.')
-                                except Exception as e:
-                                    print(f"Error fetching data from data service via local helper: {e}")
-                                    response_text_for_discord = f"An error occurred while processing your request. Error: {e}"
+                            except Exception as e:
+                                print(f"Error fetching data via local helper: {e}")
+                                response_text_for_discord = f"An error occurred while processing your request. Error: {e}"
                         else:
                             response_text_for_discord = "AI requested an unknown function."
                     elif parts[0].get('text'):
                         response_text_for_discord = parts[0]['text']
                     else:
-                        print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
-                        block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
+                        print(f"LLM first turn: No text content in response. Full response: {llm_data}")
+                        block_reason = llm_data.get('promptFeedback', {}).get('blockReason', 'unknown')
                         response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
                 else:
                     response_text_for_discord = "AI did not provide content in its response."
             else:
                 response_text_for_discord = "Could not get a valid response from the AI. Please try again."
-                if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
-                    response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
+                if llm_data.get('promptFeedback') and llm_data['promptFeedback'].get('blockReason'):
+                    response_text_for_discord += f" (Blocked: {llm_data['promptFeedback']['blockReason']})"
+        else:
+            response_text_for_discord = "Could not get a valid response from the AI. Please try again."
     
     except Exception as e:
         print(f"An unexpected error occurred in bot logic: {e}")
