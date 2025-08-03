@@ -77,6 +77,17 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     """
     global last_twelve_data_call, last_news_api_call
 
+    # --- Smarter symbol formatting ---
+    # Common crypto symbols are 2-4 letters long and often paired with /USD
+    if symbol and '/' not in symbol and 2 <= len(symbol) <= 5:
+        # Check if the symbol is likely a crypto or a stock
+        # This is a basic heuristic, assumes crypto will be paired with USD
+        crypto_symbols = ['BTC', 'ETH', 'SOL', 'AVAX', 'XRP'] # Can be expanded
+        if symbol.upper() in crypto_symbols:
+            formatted_symbol = f"{symbol}/USD"
+            print(f"INFO: Auto-formatted symbol '{symbol}' to '{formatted_symbol}' for Twelve Data.")
+            symbol = formatted_symbol
+    
     cache_key = (data_type, symbol, interval, outputsize, indicator, indicator_period,
                  news_query, from_date, sort_by, news_language)
     current_time = time.time()
@@ -232,6 +243,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             indicator_value = None
             indicator_description = ""
             
+            # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
             if data.get('values') and len(data['values']) > 0:
                 latest_values = data['values'][0]
                 print(f"DEBUG: {indicator_name_upper} - latest_values: {latest_values}")
@@ -538,6 +550,14 @@ async def on_message(message):
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
     
+    # --- FIX: Ensure conversation_histories is initialized for new users ---
+    if user_id not in conversation_histories:
+        conversation_histories[user_id] = []
+    
+    # Add current user query to history
+    conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
+    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+
     response_text_for_discord = "I'm currently unavailable. Please try again later."
     
     try:
@@ -588,8 +608,7 @@ async def on_message(message):
                 return
         
         # --- For general, conversational queries, use the LLM (single turn) ---
-        current_chat_history = [{"role": "user", "parts": [{"text": user_query}]}]
-
+        current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
         tools = [
             {
                 "functionDeclarations": [
@@ -598,7 +617,7 @@ async def on_message(message):
                         "description": (
                             "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query. "
                             "If the user asks for a general outlook, sentiment, or bullish/bearish assessment for a symbol (e.g., 'Is BTC bullish?', 'Outlook for ETH?', 'Sentiment for SOL?'), "
-                            "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter**. "
+                            "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter`. "
                             "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD)."
                         ),
                         "parameters": {
