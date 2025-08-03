@@ -35,6 +35,7 @@ MAX_CONVERSATION_TURNS = 10
 DISCORD_MESSAGE_MAX_LENGTH = 2000
 
 def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
+    """Splits a message into chunks that fit Discord's character limit."""
     if len(message_content) <= max_length:
         return [message_content]
     
@@ -110,7 +111,8 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             current_price = data.get('close')
             if current_price is not None:
                 formatted_price = f"${float(current_price):,.2f}"
-                response_data = {"text": f"The current price of {readable_symbol} is {formatted_price}."}
+                # Return the raw data and a text summary for the LLM
+                response_data = {"data": data, "text": f"The current price of {readable_symbol} is {formatted_price}."}
             else:
                 raise ValueError(f"Data service did not return a 'close' price for {symbol}. Response: {data}")
 
@@ -136,6 +138,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 raise ValueError(f"No data found for {symbol} with the specified interval and output size. Response: {data}")
 
             response_data = {
+                "data": data,
                 "text": (
                     f"I have retrieved {len(historical_values)} data points for {readable_symbol} "
                     f"at {interval_str} intervals, covering from {historical_values[-1]['datetime']} to {historical_values[0]['datetime']}. "
@@ -185,12 +188,11 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 indicator_endpoint = "ema"
                 params['time_period'] = indicator_period_str
             elif indicator_name_upper == 'SUPERTREND':
-                indicator_endpoint = "supertrent"
+                indicator_endpoint = "supertrend" # Corrected endpoint name
                 params['time_period'] = indicator_period_str
                 params['multiplier'] = indicator_multiplier_str
             elif indicator_name_upper == 'VWAP':
                 indicator_endpoint = "vwap"
-                # VWAP doesn't require extra parameters
             else:
                 raise ValueError(f"Indicator '{indicator}' not supported by direct API.")
 
@@ -204,82 +206,16 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 error_message = data.get('message', 'Unknown error from data service.')
                 raise requests.exceptions.RequestException(f"Data service error for {indicator_name_upper} for {symbol}: {error_message}")
             
-            indicator_value = None
-            indicator_description = ""
             latest_values = data.get('values', [{}])[0]
             
-            print(f"DEBUG: {indicator_name_upper} - latest_values: {latest_values}")
-
-            # --- Parsing Logic for All Indicators ---
-            if indicator_name_upper == 'RSI':
-                value = latest_values.get('rsi')
-                if value is not None:
-                    indicator_value = float(str(value).replace(',', ''))
-                    indicator_description = f"{indicator_period_str}-period Relative Strength Index"
-            elif indicator_name_upper == 'MACD':
-                macd = latest_values.get('macd')
-                signal = latest_values.get('signal')
-                histogram = latest_values.get('histogram')
-                if all(v is not None for v in [macd, signal, histogram]):
-                    indicator_value = {
-                        'MACD_Line': float(str(macd).replace(',', '')),
-                        'Signal_Line': float(str(signal).replace(',', '')),
-                        'Histogram': float(str(histogram).replace(',', ''))
-                    }
-                    indicator_description = "Moving Average Convergence Divergence"
-            elif indicator_name_upper == 'BBANDS':
-                upper = latest_values.get('upper')
-                middle = latest_values.get('middle')
-                lower = latest_values.get('lower')
-                if all(v is not None for v in [upper, middle, lower]):
-                    indicator_value = {
-                        'Upper_Band': float(str(upper).replace(',', '')),
-                        'Middle_Band': float(str(middle).replace(',', '')),
-                        'Lower_Band': float(str(lower).replace(',', ''))
-                    }
-                    indicator_description = f"{indicator_period_str}-period Bollinger Bands"
-            elif indicator_name_upper == 'STOCHRSI':
-                stochrsi_k = latest_values.get('stochrsi')
-                stochrsi_d = latest_values.get('stochrsi_signal')
-                if all(v is not None for v in [stochrsi_k, stochrsi_d]):
-                    indicator_value = {
-                        'StochRSI_K': float(str(stochrsi_k).replace(',', '')),
-                        'StochRSI_D': float(str(stochrsi_d).replace(',', ''))
-                    }
-                    indicator_description = f"{indicator_period_str}-period Stochastic Relative Strength Index"
-            elif indicator_name_upper == 'SMA':
-                value = latest_values.get('value')
-                if value is not None:
-                    indicator_value = float(str(value).replace(',', ''))
-                    indicator_description = f"{indicator_period_str}-period Simple Moving Average"
-            elif indicator_name_upper == 'EMA' or indicator_name_upper == 'MA':
-                value = latest_values.get('value')
-                if value is not None:
-                    indicator_value = float(str(value).replace(',', ''))
-                    indicator_description = f"{indicator_period_str}-period Exponential Moving Average"
-            elif indicator_name_upper == 'SUPERTREND':
-                supertrend = latest_values.get('supertrend')
-                if supertrend is not None:
-                    indicator_value = float(str(supertrend).replace(',', ''))
-                    indicator_description = f"{indicator_period_str}-period Supertrend"
-            elif indicator_name_upper == 'VWAP':
-                vwap_value = latest_values.get('vwap')
-                if vwap_value is not None:
-                    indicator_value = float(str(vwap_value).replace(',', ''))
-                    indicator_description = "Volume Weighted Average Price"
-            else:
-                raise ValueError(f"Unsupported indicator: {indicator_name_upper}")
-
-            if indicator_value is not None:
-                if isinstance(indicator_value, dict):
-                    response_text = f"The {indicator_description} for {readable_symbol} is: "
-                    for key, val in indicator_value.items():
-                        response_text += f"{key}: {val:,.2f}. "
-                    response_data = {"text": response_text.strip()}
-                else:
-                    response_data = {"text": f"The {indicator_description} for {readable_symbol} is {indicator_value:,.2f}."}
-            else:
-                raise ValueError(f"Data service did not return valid indicator values for {indicator_name_upper} for {symbol}. Raw latest_values: {latest_values}")
+            if not latest_values or not any(v is not None for v in latest_values.values()):
+                raise ValueError(f"Data service did not return valid indicator values for {indicator_name_upper} for {symbol}.")
+            
+            indicator_value_text = json.dumps(latest_values)
+            response_data = {
+                "data": latest_values,
+                "text": f"The latest values for {indicator_name_upper} for {symbol} are: {indicator_value_text}."
+            }
 
         elif data_type == 'news':
             if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
@@ -304,7 +240,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 f"apiKey={NEWS_API_KEY}"
             )
             print(f"Fetching news for '{news_query}' from News API...")
-            response = requests.get(news_api_url) # Corrected variable name from api_url
+            response = requests.get(news_api_url)
             response.raise_for_status()
             news_data = response.json()
 
@@ -319,9 +255,9 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                     title = article.get('title', 'No title')
                     source = article.get('source', {}).get('name', 'Unknown source')
                     response_text += f"Number {i+1}: '{title}' from {source}. "
-                response_data = {"text": response_text.strip()}
+                response_data = {"data": news_data, "text": response_text.strip()}
             else:
-                response_data = {"text": f"No recent news found for '{news_query}'."}
+                response_data = {"data": news_data, "text": f"No recent news found for '{news_query}'."}
         else:
             raise ValueError("Invalid 'data_type' specified.")
 
@@ -347,121 +283,114 @@ async def perform_overall_assessment(symbol):
     assessment_data = {
         'symbol': symbol,
         'live_price': None,
-        'indicators': {},
+        'indicator_details': [],
         'overall_sentiment': 'Neutral',
         'summary': ''
     }
     
+    # 1. Get Live Price
     try:
-        # 1. Get Live Price
-        live_data = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
-        current_price = float(re.search(r'\d+\.\d+', live_data['text'].replace(',', '')).group(0))
+        live_data_response = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
+        live_data = live_data_response['data']
+        current_price = float(live_data.get('close', 0))
         assessment_data['live_price'] = current_price
-        
-        # 2. Get Indicators and store values
-        indicators_to_check = ['RSI', 'MACD', 'BBANDS', 'SUPERTREND', 'SMA', 'EMA']
-        
-        for indicator in indicators_to_check:
-            try:
-                indicator_data = await _fetch_data_from_twelve_data(
-                    data_type='indicator', symbol=symbol, indicator=indicator, interval='1day'
-                )
-                assessment_data['indicators'][indicator] = indicator_data
-            except Exception as e:
-                print(f"Failed to fetch {indicator} for {symbol}: {e}")
-                assessment_data['indicators'][indicator] = {'text': f"Error fetching {indicator}."}
-
-        # 3. Analyze the Indicators to determine sentiment
-        bullish_score = 0
-        bearish_score = 0
-        neutral_score = 0
-
-        # RSI Analysis
-        rsi_text = assessment_data['indicators'].get('RSI', {}).get('text', '')
-        rsi_value_match = re.search(r'is (\d+\.\d+)', rsi_text)
-        if rsi_value_match:
-            rsi_value = float(rsi_value_match.group(1))
-            if rsi_value < 30:
-                bullish_score += 1
-            elif rsi_value > 70:
-                bearish_score += 1
-            else:
-                neutral_score += 1
-
-        # MACD Analysis
-        macd_text = assessment_data['indicators'].get('MACD', {}).get('text', '')
-        if 'MACD_Line' in macd_text and 'Signal_Line' in macd_text:
-            macd_line = float(re.search(r'MACD_Line: ([-+]?\d+\.\d+)', macd_text).group(1))
-            signal_line = float(re.search(r'Signal_Line: ([-+]?\d+\.\d+)', macd_text).group(1))
-            if macd_line > signal_line:
-                bullish_score += 1
-            elif macd_line < signal_line:
-                bearish_score += 1
-            else:
-                neutral_score += 1
-        
-        # BBANDS Analysis
-        bbands_text = assessment_data['indicators'].get('BBANDS', {}).get('text', '')
-        if current_price and 'Upper_Band' in bbands_text and 'Lower_Band' in bbands_text:
-            upper_band = float(re.search(r'Upper_Band: ([-+]?\d+\.\d+)', bbands_text).group(1))
-            lower_band = float(re.search(r'Lower_Band: ([-+]?\d+\.\d+)', bbands_text).group(1))
-            if current_price > upper_band:
-                bearish_score += 1
-            elif current_price < lower_band:
-                bullish_score += 1
-            else:
-                neutral_score += 1
-        
-        # Supertrend Analysis (assuming value above price is bearish, below is bullish)
-        supertrend_text = assessment_data['indicators'].get('SUPERTREND', {}).get('text', '')
-        if current_price and 'Supertrend' in supertrend_text:
-            supertrend_value = float(re.search(r'is ([-+]?\d+\.\d+)', supertrend_text).group(1))
-            if current_price > supertrend_value:
-                bullish_score += 1
-            elif current_price < supertrend_value:
-                bearish_score += 1
-            else:
-                neutral_score += 1
-
-        # SMA & EMA Analysis
-        sma_text = assessment_data['indicators'].get('SMA', {}).get('text', '')
-        ema_text = assessment_data['indicators'].get('EMA', {}).get('text', '')
-        if current_price and 'Simple Moving Average' in sma_text:
-            sma_value = float(re.search(r'is ([-+]?\d+\.\d+)', sma_text).group(1))
-            if current_price > sma_value:
-                bullish_score += 1
-            else:
-                bearish_score += 1
-        
-        if current_price and 'Exponential Moving Average' in ema_text:
-            ema_value = float(re.search(r'is ([-+]?\d+\.\d+)', ema_text).group(1))
-            if current_price > ema_value:
-                bullish_score += 1
-            else:
-                bearish_score += 1
-        
-        # VWAP doesn't directly contribute to a simple Bullish/Bearish score, more for intraday trading.
-        # It's better to provide its value as a fact rather than a score.
-        
-        # 4. Final Assessment
-        if bullish_score > bearish_score + 1: # A slight buffer for a strong signal
-            assessment_data['overall_sentiment'] = 'Bullish'
-        elif bearish_score > bullish_score + 1:
-            assessment_data['overall_sentiment'] = 'Bearish'
-        else:
-            assessment_data['overall_sentiment'] = 'Neutral'
-            
-        assessment_data['summary'] = (
-            f"Based on a technical analysis of {symbol}, the overall sentiment is **{assessment_data['overall_sentiment']}**.\n"
-            f"**Bullish Signals:** {bullish_score}\n"
-            f"**Bearish Signals:** {bearish_score}\n"
-            f"**Neutral Signals:** {neutral_score}\n"
-            f"**Current Price:** ${current_price:,.2f}\n"
-        )
-        
     except Exception as e:
+        print(f"Failed to fetch live price for {symbol}: {e}")
+        # Continue with other indicators even if price fails
+        current_price = None
+
+    # 2. Get Indicators and store values
+    indicators_to_check = {
+        'RSI': {'period': '14', 'description': 'Relative Strength Index'},
+        'MACD': {'period': '0', 'description': 'Moving Average Convergence Divergence'},
+        'BBANDS': {'period': '20', 'description': 'Bollinger Bands'},
+        'SUPERTREND': {'period': '10', 'multiplier': '3', 'description': 'Supertrend'},
+        'SMA_50': {'indicator': 'SMA', 'period': '50', 'description': '50-period Simple Moving Average'},
+        'SMA_200': {'indicator': 'SMA', 'period': '200', 'description': '200-period Simple Moving Average'},
+        'EMA': {'period': '20', 'description': '20-period Exponential Moving Average'},
+        'STOCHRSI': {'period': '14', 'description': 'Stochastic Relative Strength Index'},
+        'VWAP': {'period': '0', 'description': 'Volume Weighted Average Price'},
+    }
+    
+    for indicator_name, config in indicators_to_check.items():
+        try:
+            # Use the actual indicator name from config if it's a variant like SMA_50
+            api_indicator_name = config.get('indicator', indicator_name)
+            
+            indicator_data_response = await _fetch_data_from_twelve_data(
+                data_type='indicator', symbol=symbol, indicator=api_indicator_name,
+                indicator_period=config['period'], indicator_multiplier=config.get('multiplier')
+            )
+            data = indicator_data_response['data']
+
+            sub_assessment = "Neutral"
+            value = None
+
+            # --- Analysis Logic for each indicator ---
+            if 'rsi' in data:
+                value = float(data['rsi'])
+                if value < 30: sub_assessment = "Bullish"
+                elif value > 70: sub_assessment = "Bearish"
+            elif 'macd' in data and 'signal' in data:
+                macd_line = float(data['macd'])
+                signal_line = float(data['signal'])
+                if macd_line > signal_line: sub_assessment = "Bullish"
+                elif macd_line < signal_line: sub_assessment = "Bearish"
+            elif 'upper' in data and 'lower' in data and current_price is not None:
+                upper_band = float(data['upper'])
+                lower_band = float(data['lower'])
+                if current_price > upper_band: sub_assessment = "Bearish"
+                elif current_price < lower_band: sub_assessment = "Bullish"
+            elif 'supertrend' in data and current_price is not None:
+                supertrend_value = float(data['supertrend'])
+                if current_price > supertrend_value: sub_assessment = "Bullish"
+                else: sub_assessment = "Bearish"
+            elif 'value' in data and current_price is not None:
+                value = float(data['value'])
+                if current_price > value: sub_assessment = "Bullish"
+                else: sub_assessment = "Bearish"
+            elif 'stochrsi' in data:
+                stoch_k = float(data['stochrsi'])
+                if stoch_k > 80: sub_assessment = "Bearish"
+                elif stoch_k < 20: sub_assessment = "Bullish"
+            elif 'vwap' in data and current_price is not None:
+                value = float(data['vwap'])
+                if current_price > value: sub_assessment = "Bullish"
+                else: sub_assessment = "Bearish"
+            
+            assessment_data['indicator_details'].append({
+                'name': config['description'],
+                'value': value if value else data, # Store either single value or full data object
+                'assessment': sub_assessment
+            })
+
+        except Exception as e:
+            print(f"Failed to fetch or parse {indicator_name} for {symbol}: {e}")
+            assessment_data['indicator_details'].append({
+                'name': config['description'],
+                'value': 'N/A',
+                'assessment': 'Error'
+            })
+
+    # 3. Final Assessment
+    bullish_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Bullish')
+    bearish_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Bearish')
+    error_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Error')
+
+    if (bullish_count - bearish_count) > 1:
+        assessment_data['overall_sentiment'] = 'Bullish'
+    elif (bearish_count - bullish_count) > 1:
+        assessment_data['overall_sentiment'] = 'Bearish'
+    else:
         assessment_data['overall_sentiment'] = 'Neutral'
-        assessment_data['summary'] = f"An error occurred during the assessment: {e}"
+    
+    assessment_data['summary'] = (
+        f"Based on an analysis of several key technical indicators, the overall sentiment for {symbol} is **{assessment_data['overall_sentiment']}**.\n"
+        f"Number of Bullish signals: {bullish_count}\n"
+        f"Number of Bearish signals: {bearish_count}\n"
+        f"Number of Neutral signals: {sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Neutral')}\n"
+        f"Number of Errors: {error_count}"
+    )
 
     return {"text": json.dumps(assessment_data, indent=2)}
 
@@ -505,7 +434,7 @@ async def on_message(message):
                                 "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
                                 "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
                                 "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI", "SUPERTREND", "VWAP"], "description": "Name of the technical indicator. Required if data_type is 'indicator'." },
-                                "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user." },
+                                "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. For SMA or EMA, the LLM should infer a period like '50' or '200' if the user mentions 'golden cross' or a specific time frame." },
                                 "indicator_multiplier": { "type": "string", "description": "Multiplier for indicators like Supertrend. Default to '3'."},
                                 "news_query": { "type": "string", "description": "Keywords for news search." },
                                 "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
@@ -567,41 +496,32 @@ async def on_message(message):
                         print(f"LLM requested tool call: {function_name} with args: {function_args}")
                         current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
 
-                        # Handle the new 'perform_overall_assessment' tool
-                        if function_name == "get_market_data":
-                            if 'interval' not in function_args:
-                                function_args['interval'] = '1day'
-                            if 'indicator_period' not in function_args:
-                                if function_args.get('indicator', '').upper() == 'MACD':
-                                    function_args['indicator_period'] = '0'
-                                else:
-                                    function_args['indicator_period'] = '14'
-                            
-                            for key, value in function_args.items():
-                                function_args[key] = str(value)
-                            
-                            try:
-                                tool_output_data = await _fetch_data_from_twelve_data(**function_args)
-                                tool_output_text = tool_output_data.get('text', 'No specific response from data service.')
-                                print(f"Tool execution output: {tool_output_text}")
-                            except Exception as e:
-                                print(f"Error fetching data from data service: {e}")
-                                tool_output_text = f"Error fetching data: {e}"
-                            
-                        elif function_name == "perform_overall_assessment":
-                            try:
-                                tool_output_data = await perform_overall_assessment(**function_args)
-                                # The response will be a JSON string, so we need to process it
-                                tool_output_dict = json.loads(tool_output_data['text'])
-                                tool_output_text = tool_output_dict.get('summary', 'Could not generate a summary.')
-                                tool_output_text += f"\n**Raw Data:** {tool_output_data['text']}"
-                                print(f"Overall assessment output: {tool_output_text}")
-                            except Exception as e:
-                                print(f"Error performing overall assessment: {e}")
-                                tool_output_text = f"Error performing assessment: {e}"
+                        tool_output_text = ""
+                        try:
+                            if function_name == "get_market_data":
+                                if 'indicator_period' not in function_args:
+                                    if function_args.get('indicator', '').upper() == 'MACD':
+                                        function_args['indicator_period'] = '0'
+                                    elif 'ma' in user_query.lower() and ('50' in user_query or '200' in user_query):
+                                        period = re.search(r'\b(50|200)\b', user_query)
+                                        function_args['indicator_period'] = period.group(1) if period else '14'
+                                    else:
+                                        function_args['indicator_period'] = '14'
+                                
+                                for key, value in function_args.items():
+                                    function_args[key] = str(value)
+                                
+                                tool_output_data_raw = await _fetch_data_from_twelve_data(**function_args)
+                                tool_output_text = json.dumps(tool_output_data_raw, indent=2)
 
-                        else:
-                            tool_output_text = "AI requested an unknown function."
+                            elif function_name == "perform_overall_assessment":
+                                tool_output_data_raw = await perform_overall_assessment(**function_args)
+                                tool_output_text = json.dumps(tool_output_data_raw, indent=2)
+                            else:
+                                tool_output_text = json.dumps({"error": f"AI requested an unknown function: {function_name}"})
+                        except Exception as e:
+                            print(f"Error during tool execution: {e}")
+                            tool_output_text = json.dumps({"error": f"Error during tool execution: {e}"})
 
                         current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
 
