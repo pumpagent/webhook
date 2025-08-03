@@ -67,14 +67,6 @@ def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
 
     return chunks
 
-
-async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, outputsize=None,
-                                       indicator=None, indicator_period=None, news_query=None,
-                                       from_date=None, sort_by=None, news_language=None):
-    """
-    Helper function to fetch data directly from Twelve Data API or NewsAPI.org.
-    Includes rate limiting and caching.
-    """
     global last_twelve_data_call, last_news_api_call
 
     # --- Smarter symbol formatting ---
