@@ -547,11 +547,11 @@ async def on_message(message):
     
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
-
-    # --- FIX: Ensure conversation_histories is initialized for new users ---
+    
     if user_id not in conversation_histories:
         conversation_histories[user_id] = []
     
+    # Add current user query to history
     conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
     current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
 
