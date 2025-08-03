@@ -22,9 +22,9 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between API calls)
+TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
-NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
+NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
 api_response_cache = {}
 CACHE_DURATION = 10 # Cache responses for 10 seconds
 
@@ -286,8 +286,8 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                             print(f"DEBUG: ValueError during BBANDS float conversion: {ve}")
                             indicator_value = None
                 elif indicator_name_upper == 'STOCHRSI':
-                    stochrsi_k = latest_values.get('k') # Corrected key from 'stochrsi' to 'k'
-                    stochrsi_d = latest_values.get('d') # Corrected key from 'stochrsi_signal' to 'd'
+                    stochrsi_k = latest_values.get('k')
+                    stochrsi_d = latest_values.get('d')
                     if all(v is not None for v in [stochrsi_k, stochrsi_d]):
                         try:
                             indicator_value = {
