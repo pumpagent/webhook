@@ -23,7 +23,7 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 3 # Increased to 3 seconds to avoid rate limiting
+TWELVE_DATA_MIN_INTERVAL = 5 # Increased to 5 seconds for robustness
 last_news_api_call = 0
 NEWS_API_MIN_INTERVAL = 1
 api_response_cache = {}
@@ -296,7 +296,6 @@ async def perform_overall_assessment(symbol):
         assessment_data['live_price'] = current_price
     except Exception as e:
         print(f"Failed to fetch live price for {symbol}: {e}")
-        # Return a structured error and stop the assessment
         assessment_data['overall_sentiment'] = 'Error'
         assessment_data['summary'] = f"Failed to get live price, cannot perform full assessment: {e}"
         return {"text": json.dumps(assessment_data, indent=2)}
@@ -319,11 +318,25 @@ async def perform_overall_assessment(symbol):
             # Use the actual indicator name from config if it's a variant like SMA_50
             api_indicator_name = config.get('indicator', indicator_name)
             
-            indicator_data_response = await _fetch_data_from_twelve_data(
-                data_type='indicator', symbol=symbol, indicator=api_indicator_name,
-                indicator_period=config['period'], indicator_multiplier=config.get('multiplier')
-            )
-            data = indicator_data_response['data']
+            # Catch potential JSONDecodeError specifically
+            try:
+                indicator_data_response = await _fetch_data_from_twelve_data(
+                    data_type='indicator', symbol=symbol, indicator=api_indicator_name,
+                    indicator_period=config['period'], indicator_multiplier=config.get('multiplier')
+                )
+                data = indicator_data_response['data']
+                
+                if not data:
+                     raise ValueError("Empty data received from API.")
+            except requests.exceptions.RequestException as e:
+                print(f"API call failed for {indicator_name}: {e}")
+                raise e # Re-raise to be caught by the outer block
+            except json.JSONDecodeError as e:
+                print(f"JSON decoding failed for {indicator_name}: {e}")
+                data = {} # Treat as empty data
+            except Exception as e:
+                print(f"Unexpected error in API response for {indicator_name}: {e}")
+                data = {}
 
             sub_assessment = "Neutral"
             value = None
@@ -366,8 +379,8 @@ async def perform_overall_assessment(symbol):
                 'assessment': sub_assessment
             })
             
-            # Add a small delay between each API call to respect rate limits
-            await asyncio.sleep(1)
+            # Add a longer delay between each API call to respect rate limits
+            await asyncio.sleep(2)
 
         except Exception as e:
             print(f"Failed to fetch or parse {indicator_name} for {symbol}: {e}")
