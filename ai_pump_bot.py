@@ -67,6 +67,14 @@ def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
 
     return chunks
 
+
+async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, outputsize=None,
+                                       indicator=None, indicator_period=None, news_query=None,
+                                       from_date=None, sort_by=None, news_language=None):
+    """
+    Helper function to fetch data directly from Twelve Data API or NewsAPI.org.
+    Includes rate limiting and caching.
+    """
     global last_twelve_data_call, last_news_api_call
 
     # --- Smarter symbol formatting ---
@@ -233,6 +241,7 @@ def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
             indicator_value = None
             indicator_description = ""
             
+            # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
             if data.get('values') and len(data['values']) > 0:
                 latest_values = data['values'][0]
                 print(f"DEBUG: {indicator_name_upper} - latest_values: {latest_values}")
@@ -277,8 +286,8 @@ def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
                             print(f"DEBUG: ValueError during BBANDS float conversion: {ve}")
                             indicator_value = None
                 elif indicator_name_upper == 'STOCHRSI':
-                    stochrsi_k = latest_values.get('stochrsi')
-                    stochrsi_d = latest_values.get('stochrsi_signal')
+                    stochrsi_k = latest_values.get('k') # Corrected key from 'stochrsi' to 'k'
+                    stochrsi_d = latest_values.get('d') # Corrected key from 'stochrsi_signal' to 'd'
                     if all(v is not None for v in [stochrsi_k, stochrsi_d]):
                         try:
                             indicator_value = {
@@ -539,14 +548,6 @@ async def on_message(message):
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
     
-    # --- FIX: Ensure conversation_histories is initialized for new users ---
-    if user_id not in conversation_histories:
-        conversation_histories[user_id] = []
-    
-    # Add current user query to history
-    conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
-    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
-
     response_text_for_discord = "I'm currently unavailable. Please try again later."
     
     try:
@@ -597,7 +598,8 @@ async def on_message(message):
                 return
         
         # --- For general, conversational queries, use the LLM (single turn) ---
-        current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+        current_chat_history = [{"role": "user", "parts": [{"text": user_query}]}]
+
         tools = [
             {
                 "functionDeclarations": [
@@ -606,7 +608,7 @@ async def on_message(message):
                         "description": (
                             "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query. "
                             "If the user asks for a general outlook, sentiment, or bullish/bearish assessment for a symbol (e.g., 'Is BTC bullish?', 'Outlook for ETH?', 'Sentiment for SOL?'), "
-                            "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter`. "
+                            "call this tool with `data_type='indicator'` and **do not provide a specific `indicator` parameter**. "
                             "Default `interval` is '1day'. Default `indicator_period` is '14' (or '0' for MACD)."
                         ),
                         "parameters": {
