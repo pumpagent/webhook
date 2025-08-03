@@ -80,9 +80,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     # --- Smarter symbol formatting ---
     # Common crypto symbols are 2-4 letters long and often paired with /USD
     if symbol and '/' not in symbol and 2 <= len(symbol) <= 5:
-        # Check if the symbol is likely a crypto or a stock
-        # This is a basic heuristic, assumes crypto will be paired with USD
-        crypto_symbols = ['BTC', 'ETH', 'SOL', 'AVAX', 'XRP'] # Can be expanded
+        crypto_symbols = ['BTC', 'ETH', 'SOL', 'AVAX', 'XRP']
         if symbol.upper() in crypto_symbols:
             formatted_symbol = f"{symbol}/USD"
             print(f"INFO: Auto-formatted symbol '{symbol}' to '{formatted_symbol}' for Twelve Data.")
@@ -243,7 +241,6 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             indicator_value = None
             indicator_description = ""
             
-            # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
             if data.get('values') and len(data['values']) > 0:
                 latest_values = data['values'][0]
                 print(f"DEBUG: {indicator_name_upper} - latest_values: {latest_values}")
@@ -604,7 +601,7 @@ async def on_message(message):
                 return
             except Exception as e:
                 print(f"Error fetching indicator {indicator_name} for {symbol}: {e}")
-                await message.channel.send(f"An error occurred while fetching the indicator {indicator_name} for {symbol}. Error: {e}")
+                await message.channel.send(f"An error occurred while processing your request. Error: {e}")
                 return
         
         # --- For general, conversational queries, use the LLM (single turn) ---
