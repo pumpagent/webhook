@@ -80,6 +80,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     # --- Smarter symbol formatting ---
     # Common crypto symbols are 2-4 letters long and often paired with /USD
     if symbol and '/' not in symbol and 2 <= len(symbol) <= 5:
+        # We can add a simple heuristic for common crypto symbols
         crypto_symbols = ['BTC', 'ETH', 'SOL', 'AVAX', 'XRP']
         if symbol.upper() in crypto_symbols:
             formatted_symbol = f"{symbol}/USD"
@@ -241,7 +242,6 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             indicator_value = None
             indicator_description = ""
             
-            # --- CORRECTED PARSING FOR INDICATOR VALUES FROM 'values' LIST ---
             if data.get('values') and len(data['values']) > 0:
                 latest_values = data['values'][0]
                 print(f"DEBUG: {indicator_name_upper} - latest_values: {latest_values}")
