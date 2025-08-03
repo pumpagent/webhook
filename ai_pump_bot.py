@@ -5,6 +5,7 @@ import json
 import re
 import time
 from datetime import datetime, timedelta
+import asyncio
 
 # --- API Keys and URLs (Set as Environment Variables on Render) ---
 DISCORD_BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
@@ -22,7 +23,7 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 1
+TWELVE_DATA_MIN_INTERVAL = 3 # Increased to 3 seconds to avoid rate limiting
 last_news_api_call = 0
 NEWS_API_MIN_INTERVAL = 1
 api_response_cache = {}
@@ -361,9 +362,12 @@ async def perform_overall_assessment(symbol):
             
             assessment_data['indicator_details'].append({
                 'name': config['description'],
-                'value': value if value is not None else data, # Store either single value or full data object
+                'value': value if value is not None else data,
                 'assessment': sub_assessment
             })
+            
+            # Add a small delay between each API call to respect rate limits
+            await asyncio.sleep(1)
 
         except Exception as e:
             print(f"Failed to fetch or parse {indicator_name} for {symbol}: {e}")
@@ -387,20 +391,24 @@ async def perform_overall_assessment(symbol):
     elif bullish_count > 0 or bearish_count > 0:
         assessment_data['overall_sentiment'] = 'Neutral'
     else:
-        assessment_data['overall_sentiment'] = 'Error' # If no data can be retrieved
+        assessment_data['overall_sentiment'] = 'Error'
 
-    assessment_data['summary'] = (
-        f"Based on an analysis of several key technical indicators, the overall sentiment for {symbol} is **{assessment_data['overall_sentiment']}**.\n\n"
-        f"**Live Price:** ${current_price:,.2f} \n\n"
-        f"**Indicator Assessments:**\n" + 
-        "\n".join([f"- {d['name']}: {d['assessment']}" for d in assessment_data['indicator_details']]) + "\n\n"
-        f"**Final Score:**\n"
-        f"- Bullish signals: {bullish_count}\n"
-        f"- Bearish signals: {bearish_count}\n"
-        f"- Neutral signals: {neutral_count}\n"
-        f"- Errors: {error_count}"
+    # Generate a more descriptive summary for the LLM to use
+    indicator_list = "\n".join([f"- **{d['name']}**: {d['assessment']}" for d in assessment_data['indicator_details'] if d['assessment'] != 'Error'])
+    error_list = "\n".join([f"- {d['name']}" for d in assessment_data['indicator_details'] if d['assessment'] == 'Error'])
+    
+    summary_text = (
+        f"Based on a technical analysis of several key indicators, the overall sentiment for {symbol} is **{assessment_data['overall_sentiment']}**.\n\n"
+        f"**Live Price:** ${current_price:,.2f}\n\n"
+        f"**Indicator Assessments:**\n"
+        f"{indicator_list}\n"
     )
 
+    if error_count > 0:
+        summary_text += f"\n**Note:** I encountered errors fetching data for the following indicators:\n{error_list}"
+
+    assessment_data['summary'] = summary_text
+    
     return {"text": json.dumps(assessment_data, indent=2)}
 
 
