@@ -22,9 +22,9 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 1 # seconds (e.g., 10 seconds between API calls)
+TWELVE_DATA_MIN_INTERVAL = 10 # seconds (e.g., 10 seconds between API calls)
 last_news_api_call = 0
-NEWS_API_MIN_INTERVAL = 1 # seconds for news API as well
+NEWS_API_MIN_INTERVAL = 10 # seconds for news API as well
 api_response_cache = {}
 CACHE_DURATION = 10 # Cache responses for 10 seconds
 
@@ -610,6 +610,8 @@ async def on_message(message):
                 return
         
         # --- For general, conversational queries, use the LLM (single turn) ---
+        current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+
         tools = [
             {
                 "functionDeclarations": [
