@@ -23,7 +23,7 @@ client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
 last_twelve_data_call = 0
-TWELVE_DATA_MIN_INTERVAL = 5 # Increased to 5 seconds for robustness
+TWELVE_DATA_MIN_INTERVAL = 1
 last_news_api_call = 0
 NEWS_API_MIN_INTERVAL = 1
 api_response_cache = {}
@@ -60,6 +60,23 @@ def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
 
     return chunks
 
+async def _fetch_with_retries(url, params=None, max_retries=5, initial_delay=2):
+    """Fetches data with exponential backoff and retries."""
+    for i in range(max_retries):
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {i+1} failed: {e}")
+            if i < max_retries - 1:
+                delay = initial_delay * (2 ** i)
+                print(f"Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
+            else:
+                raise e
+    return None
+
 async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, outputsize=None,
                                       indicator=None, indicator_period=None, indicator_multiplier=None,
                                       news_query=None, from_date=None, sort_by=None, news_language=None):
@@ -82,15 +99,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     if data_type != 'news':
         if (current_time - last_twelve_data_call) < TWELVE_DATA_MIN_INTERVAL:
             time_to_wait = TWELVE_DATA_MIN_INTERVAL - (current_time - last_twelve_data_call)
-            raise requests.exceptions.RequestException(
-                f"Rate limit hit for data service. Please wait {time_to_wait:.2f} seconds."
-            )
-    else:
-        if (current_time - last_news_api_call) < NEWS_API_MIN_INTERVAL:
-            time_to_wait = NEWS_API_MIN_INTERVAL - (current_time - last_news_api_call)
-            raise requests.exceptions.RequestException(
-                f"Rate limit hit for News API. Please wait {int(time_to_wait) + 1} seconds."
-            )
+            await asyncio.sleep(time_to_wait)
 
     readable_symbol = symbol.replace('/', ' to ').replace(':', ' ').upper() if symbol else "N/A"
     response_data = {}
@@ -101,8 +110,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 raise ValueError("Missing 'symbol' parameter for live price.")
             api_url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_API_KEY}"
             print(f"Fetching live price for {symbol} from data service...")
-            response = requests.get(api_url)
-            response.raise_for_status()
+            response = await _fetch_with_retries(api_url)
             data = response.json()
 
             if data.get('status') == 'error':
@@ -125,8 +133,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             
             api_url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval_str}&outputsize={outputsize_str}&apikey={TWELVE_DATA_API_KEY}"
             print(f"Fetching data for {symbol} (interval: {interval_str}, outputsize: {outputsize_str}) from data service...")
-            response = requests.get(api_url)
-            response.raise_for_status()
+            response = await _fetch_with_retries(api_url)
             data = response.json()
 
             if data.get('status') == 'error':
@@ -198,8 +205,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
 
             api_url = f"{base_api_url}{indicator_endpoint}"
             print(f"Fetching {indicator_name_upper} for {symbol} from data service with params: {params}...")
-            response = requests.get(api_url, params=params)
-            response.raise_for_status()
+            response = await _fetch_with_retries(api_url, params=params)
             data = response.json()
 
             if data.get('status') == 'error':
@@ -315,28 +321,13 @@ async def perform_overall_assessment(symbol):
     
     for indicator_name, config in indicators_to_check.items():
         try:
-            # Use the actual indicator name from config if it's a variant like SMA_50
             api_indicator_name = config.get('indicator', indicator_name)
             
-            # Catch potential JSONDecodeError specifically
-            try:
-                indicator_data_response = await _fetch_data_from_twelve_data(
-                    data_type='indicator', symbol=symbol, indicator=api_indicator_name,
-                    indicator_period=config['period'], indicator_multiplier=config.get('multiplier')
-                )
-                data = indicator_data_response['data']
-                
-                if not data:
-                     raise ValueError("Empty data received from API.")
-            except requests.exceptions.RequestException as e:
-                print(f"API call failed for {indicator_name}: {e}")
-                raise e # Re-raise to be caught by the outer block
-            except json.JSONDecodeError as e:
-                print(f"JSON decoding failed for {indicator_name}: {e}")
-                data = {} # Treat as empty data
-            except Exception as e:
-                print(f"Unexpected error in API response for {indicator_name}: {e}")
-                data = {}
+            indicator_data_response = await _fetch_data_from_twelve_data(
+                data_type='indicator', symbol=symbol, indicator=api_indicator_name,
+                indicator_period=config['period'], indicator_multiplier=config.get('multiplier')
+            )
+            data = indicator_data_response['data']
 
             sub_assessment = "Neutral"
             value = None
@@ -378,9 +369,6 @@ async def perform_overall_assessment(symbol):
                 'value': value if value is not None else data,
                 'assessment': sub_assessment
             })
-            
-            # Add a longer delay between each API call to respect rate limits
-            await asyncio.sleep(2)
 
         except Exception as e:
             print(f"Failed to fetch or parse {indicator_name} for {symbol}: {e}")
@@ -396,7 +384,6 @@ async def perform_overall_assessment(symbol):
     error_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Error')
     neutral_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Neutral')
 
-    # A more balanced scoring for the final sentiment
     if bullish_count > (bearish_count + neutral_count) and bullish_count > 0:
         assessment_data['overall_sentiment'] = 'Bullish'
     elif bearish_count > (bullish_count + neutral_count) and bearish_count > 0:
@@ -406,7 +393,6 @@ async def perform_overall_assessment(symbol):
     else:
         assessment_data['overall_sentiment'] = 'Error'
 
-    # Generate a more descriptive summary for the LLM to use
     indicator_list = "\n".join([f"- **{d['name']}**: {d['assessment']}" for d in assessment_data['indicator_details'] if d['assessment'] != 'Error'])
     error_list = "\n".join([f"- {d['name']}" for d in assessment_data['indicator_details'] if d['assessment'] == 'Error'])
     
@@ -424,6 +410,72 @@ async def perform_overall_assessment(symbol):
     
     return {"text": json.dumps(assessment_data, indent=2)}
 
+# --- NEW: Candlestick Pattern Analysis Function ---
+async def analyze_candlestick_patterns(symbol, interval='1day', outputsize='100'):
+    """
+    Analyzes historical data for common candlestick patterns.
+    """
+    patterns_found = []
+    
+    try:
+        historical_data_response = await _fetch_data_from_twelve_data(
+            data_type='historical', 
+            symbol=symbol, 
+            interval=interval, 
+            outputsize=outputsize
+        )
+        historical_values = historical_data_response['data'].get('values', [])
+        
+        if len(historical_values) < 2:
+            return {"text": f"Not enough historical data to analyze candlestick patterns for {symbol}."}
+        
+        # Helper function to convert data to floats
+        def convert_to_float(candle):
+            return {k: float(v) for k, v in candle.items() if k not in ['datetime']}
+
+        # Loop through the data to find patterns
+        for i in range(len(historical_values) - 1):
+            current_candle = convert_to_float(historical_values[i])
+            previous_candle = convert_to_float(historical_values[i+1])
+            
+            open_c = current_candle['open']
+            high_c = current_candle['high']
+            low_c = current_candle['low']
+            close_c = current_candle['close']
+            datetime_c = historical_values[i]['datetime']
+            
+            open_p = previous_candle['open']
+            close_p = previous_candle['close']
+
+            # Check for Doji (open and close are very close)
+            if abs(open_c - close_c) < (high_c - low_c) * 0.1:
+                patterns_found.append({"pattern": "Doji", "date": datetime_c, "description": "A sign of indecision in the market."})
+
+            # Check for Bullish Engulfing
+            if close_c > open_c and open_p > close_p and open_c < close_p and close_c > open_p:
+                patterns_found.append({"pattern": "Bullish Engulfing", "date": datetime_c, "description": "A bullish reversal pattern where a large green candle engulfs the previous red candle."})
+
+            # Check for Bearish Engulfing
+            if close_c < open_c and open_p < close_p and open_c > close_p and close_c < open_p:
+                patterns_found.append({"pattern": "Bearish Engulfing", "date": datetime_c, "description": "A bearish reversal pattern where a large red candle engulfs the previous green candle."})
+                
+            # Check for Hammer/Hanging Man (Small body, long lower shadow)
+            body_size = abs(open_c - close_c)
+            total_range = high_c - low_c
+            lower_shadow = min(open_c, close_c) - low_c
+            
+            if body_size < total_range * 0.3 and lower_shadow > body_size * 2:
+                # Hammer or Hanging Man, depending on the trend
+                pattern_name = "Hammer" if close_c > previous_candle['close'] else "Hanging Man"
+                patterns_found.append({"pattern": pattern_name, "date": datetime_c, "description": "A potential reversal pattern with a small body and a long lower shadow."})
+                
+    except Exception as e:
+        return {"text": f"An error occurred during candlestick pattern analysis: {e}"}
+        
+    if not patterns_found:
+        return {"text": f"No common candlestick patterns found in the last {outputsize} data points for {symbol}."}
+    
+    return {"text": json.dumps({"symbol": symbol, "patterns": patterns_found}, indent=2)}
 
 @client.event
 async def on_message(message):
@@ -481,6 +533,18 @@ async def on_message(message):
                             "type": "object",
                             "properties": {
                                 "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." }
+                            },
+                            "required": ["symbol"]
+                        }
+                    },
+                    {
+                        "name": "analyze_candlestick_patterns",
+                        "description": "Analyzes historical price data for common candlestick patterns like Doji, Hammer, and Bullish/Bearish Engulfing.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": { "type": "string", "description": "The ticker symbol for the asset (e.g., 'BTC/USD')." },
+                                "interval": { "type": "string", "description": "The time interval for the historical data (e.g., '1day', '1week'). Default is '1day'." }
                             },
                             "required": ["symbol"]
                         }
@@ -543,6 +607,15 @@ async def on_message(message):
                                 
                                 tool_output_data_raw = await _fetch_data_from_twelve_data(**function_args)
                                 tool_output_text = json.dumps(tool_output_data_raw, indent=2)
+                            
+                            elif function_name == "analyze_candlestick_patterns":
+                                symbol_arg = function_args.get('symbol')
+                                interval_arg = function_args.get('interval', '1day')
+                                tool_output_data_raw = await analyze_candlestick_patterns(
+                                    symbol=str(symbol_arg), 
+                                    interval=str(interval_arg)
+                                )
+                                tool_output_text = tool_output_data_raw['text']
 
                             elif function_name == "perform_overall_assessment":
                                 tool_output_data_raw = await perform_overall_assessment(**function_args)
