@@ -538,6 +538,8 @@ async def on_message(message):
     user_query = message.content.strip()
     print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
     
+    response_text_for_discord = "I'm currently unavailable. Please try again later."
+    
     try:
         query_lower = user_query.lower()
         
