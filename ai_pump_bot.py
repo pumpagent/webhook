@@ -111,7 +111,6 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             current_price = data.get('close')
             if current_price is not None:
                 formatted_price = f"${float(current_price):,.2f}"
-                # Return the raw data and a text summary for the LLM
                 response_data = {"data": data, "text": f"The current price of {readable_symbol} is {formatted_price}."}
             else:
                 raise ValueError(f"Data service did not return a 'close' price for {symbol}. Response: {data}")
@@ -188,7 +187,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 indicator_endpoint = "ema"
                 params['time_period'] = indicator_period_str
             elif indicator_name_upper == 'SUPERTREND':
-                indicator_endpoint = "supertrend" # Corrected endpoint name
+                indicator_endpoint = "supertrend"
                 params['time_period'] = indicator_period_str
                 params['multiplier'] = indicator_multiplier_str
             elif indicator_name_upper == 'VWAP':
@@ -296,8 +295,10 @@ async def perform_overall_assessment(symbol):
         assessment_data['live_price'] = current_price
     except Exception as e:
         print(f"Failed to fetch live price for {symbol}: {e}")
-        # Continue with other indicators even if price fails
-        current_price = None
+        # Return a structured error and stop the assessment
+        assessment_data['overall_sentiment'] = 'Error'
+        assessment_data['summary'] = f"Failed to get live price, cannot perform full assessment: {e}"
+        return {"text": json.dumps(assessment_data, indent=2)}
 
     # 2. Get Indicators and store values
     indicators_to_check = {
@@ -360,7 +361,7 @@ async def perform_overall_assessment(symbol):
             
             assessment_data['indicator_details'].append({
                 'name': config['description'],
-                'value': value if value else data, # Store either single value or full data object
+                'value': value if value is not None else data, # Store either single value or full data object
                 'assessment': sub_assessment
             })
 
@@ -376,20 +377,28 @@ async def perform_overall_assessment(symbol):
     bullish_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Bullish')
     bearish_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Bearish')
     error_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Error')
+    neutral_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Neutral')
 
-    if (bullish_count - bearish_count) > 1:
+    # A more balanced scoring for the final sentiment
+    if bullish_count > (bearish_count + neutral_count) and bullish_count > 0:
         assessment_data['overall_sentiment'] = 'Bullish'
-    elif (bearish_count - bullish_count) > 1:
+    elif bearish_count > (bullish_count + neutral_count) and bearish_count > 0:
         assessment_data['overall_sentiment'] = 'Bearish'
-    else:
+    elif bullish_count > 0 or bearish_count > 0:
         assessment_data['overall_sentiment'] = 'Neutral'
-    
+    else:
+        assessment_data['overall_sentiment'] = 'Error' # If no data can be retrieved
+
     assessment_data['summary'] = (
-        f"Based on an analysis of several key technical indicators, the overall sentiment for {symbol} is **{assessment_data['overall_sentiment']}**.\n"
-        f"Number of Bullish signals: {bullish_count}\n"
-        f"Number of Bearish signals: {bearish_count}\n"
-        f"Number of Neutral signals: {sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Neutral')}\n"
-        f"Number of Errors: {error_count}"
+        f"Based on an analysis of several key technical indicators, the overall sentiment for {symbol} is **{assessment_data['overall_sentiment']}**.\n\n"
+        f"**Live Price:** ${current_price:,.2f} \n\n"
+        f"**Indicator Assessments:**\n" + 
+        "\n".join([f"- {d['name']}: {d['assessment']}" for d in assessment_data['indicator_details']]) + "\n\n"
+        f"**Final Score:**\n"
+        f"- Bullish signals: {bullish_count}\n"
+        f"- Bearish signals: {bearish_count}\n"
+        f"- Neutral signals: {neutral_count}\n"
+        f"- Errors: {error_count}"
     )
 
     return {"text": json.dumps(assessment_data, indent=2)}
