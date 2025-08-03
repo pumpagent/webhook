@@ -165,7 +165,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             }
 
         elif data_type == 'indicator':
-            if not all([symbol, indicator]): # indicator_period can be defaulted
+            if not all([symbol, indicator]):
                 raise ValueError("Missing required parameters for indicator data (symbol, indicator).")
             
             indicator_name_upper = indicator.upper()
@@ -173,7 +173,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             indicator_endpoint = ""
             params = {
                 'symbol': symbol,
-                'interval': interval if interval else '1day', # Default interval
+                'interval': interval if interval else '1day',
                 'apikey': TWELVE_DATA_API_KEY
             }
             
