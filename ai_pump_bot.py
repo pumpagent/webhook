@@ -200,6 +200,24 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 params['multiplier'] = indicator_multiplier_str
             elif indicator_name_upper == 'VWAP':
                 indicator_endpoint = "vwap"
+            elif indicator_name_upper == 'SAR': # Parabolic SAR
+                indicator_endpoint = "sarext" # Twelve Data uses sarext for Parabolic SAR Extended
+                # Default parameters for sarext if not provided by LLM
+                params['start_value'] = 0.02
+                params['offset'] = 0.02
+                params['max_value'] = 0.2
+            elif indicator_name_upper == 'PIVOT_POINTS': # Pivot Points
+                indicator_endpoint = "pivot_points"
+                # Twelve Data API for pivot_points usually needs a type, e.g., 'fibonacci', 'woodie', 'classic'
+                # For simplicity, we'll assume 'classic' or let the API default if not specified.
+                # The screenshot shows PIVOT_POINTS_HL, which implies High/Low based.
+                # We'll rely on the API's default calculation if no type is given.
+            elif indicator_name_upper == 'ULTOSC': # Ultimate Oscillator
+                indicator_endpoint = "ultosc"
+                # Default periods for Ultimate Oscillator
+                params['time_period1'] = 7
+                params['time_period2'] = 14
+                params['time_period3'] = 28
             else:
                 raise ValueError(f"Indicator '{indicator}' not supported by direct API.")
 
@@ -515,7 +533,7 @@ async def on_message(message):
                                 "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch (live, historical, indicator, news). This is required." },
                                 "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
                                 "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
-                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI", "SUPERTREND", "VWAP"], "description": "Name of the technical indicator. Required if data_type is 'indicator'." },
+                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI", "SUPERTREND", "VWAP", "SAR", "PIVOT_POINTS", "ULTOSC"], "description": "Name of the technical indicator. Required if data_type is 'indicator'." },
                                 "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. For SMA or EMA, the LLM should infer a period like '50' or '200' if the user mentions 'golden cross' or a specific time frame." },
                                 "indicator_multiplier": { "type": "string", "description": "Multiplier for indicators like Supertrend. Default to '3'."},
                                 "news_query": { "type": "string", "description": "Keywords for news search." },
