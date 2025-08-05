@@ -364,7 +364,7 @@ async def perform_overall_assessment(symbol):
                 # Bullish if MACD line is above Signal line
                 if macd_line > signal_line:
                     sub_assessment = "Bullish"
-                elif macd_line < signal_line:
+                elif macd_line < signal_line: # Bearish if MACD line is below Signal line
                     sub_assessment = "Bearish"
             elif 'upper' in data and 'middle' in data and 'lower' in data and current_price is not None:
                 upper_band = float(data['upper'])
