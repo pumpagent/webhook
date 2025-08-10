@@ -269,7 +269,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             news_data = response.json()
 
             if news_data.get('status') == 'error':
-                error_message = data.get('message', 'Unknown error from News API.')
+                error_message = news_data.get('message', 'Unknown error from News API.')
                 raise requests.exceptions.RequestException(f"News API error: {error_message}")
             
             articles = news_data.get('articles')
@@ -301,7 +301,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
 # --- New Function for Overall Assessment ---
 async def perform_overall_assessment(symbol):
     """
-    Performs a technical analysis using multiple indicators to provide an overall assessment.
+    Performs a technical analysis using a specific set of indicators to provide an overall assessment.
     Returns a dictionary with the assessment and a summary text.
     """
     assessment_data = {
@@ -325,14 +325,13 @@ async def perform_overall_assessment(symbol):
         return {"text": json.dumps(assessment_data, indent=2)}
 
     # 2. Get Indicators and store values
-    # Only include the indicators requested for overall analysis
+    # Updated to only include the requested indicators
     indicators_to_check = {
         'RSI': {'period': '14', 'description': 'Relative Strength Index'},
         'MACD': {'period': '0', 'description': 'Moving Average Convergence Divergence'},
         'SUPERTREND': {'period': '10', 'multiplier': '3', 'description': 'Supertrend'},
         'SMA_50': {'indicator': 'SMA', 'period': '50', 'description': '50-period Simple Moving Average'},
         'SMA_200': {'indicator': 'SMA', 'period': '200', 'description': '200-period Simple Moving Average'},
-        'EMA': {'period': '20', 'description': '20-period Exponential Moving Average'},
         'VWAP': {'period': '0', 'description': 'Volume Weighted Average Price'},
     }
     
@@ -352,16 +351,21 @@ async def perform_overall_assessment(symbol):
             # --- Analysis Logic for each indicator ---
             if 'rsi' in data:
                 value = float(data['rsi'])
-                if value >= 30 and value <= 85:
+                # Bullish in "sweet spot" (30-70)
+                if value >= 30 and value <= 70:
                     sub_assessment = "Bullish"
-                elif value < 30 or value > 85:
+                # Bearish if overbought (>85) or oversold (<30)
+                elif value > 85 or value < 30:
                     sub_assessment = "Bearish"
+                else: # Defaulting the rest to neutral
+                    sub_assessment = "Neutral"
             elif 'macd' in data and 'signal' in data:
                 macd_line = float(data['macd'])
                 signal_line = float(data['signal'])
+                # Bullish if MACD line is above Signal line
                 if macd_line > signal_line:
                     sub_assessment = "Bullish"
-                elif macd_line < signal_line:
+                elif macd_line < signal_line: # Bearish if MACD line is below Signal line
                     sub_assessment = "Bearish"
             elif 'supertrend' in data and current_price is not None:
                 supertrend_value = float(data['supertrend'])
@@ -369,6 +373,7 @@ async def perform_overall_assessment(symbol):
                 else: sub_assessment = "Bearish"
             elif 'value' in data and current_price is not None:
                 value = float(data['value'])
+                # Bullish if price is trading above SMA/EMA
                 if current_price > value:
                     sub_assessment = "Bullish"
                 else:
@@ -408,4 +413,306 @@ async def perform_overall_assessment(symbol):
         assessment_data['overall_sentiment'] = 'Error'
 
     indicator_list = "\n".join([f"- **{d['name']}**: {d['assessment']}" for d in assessment_data['indicator_details'] if d['assessment'] != 'Error'])
-    error_list = "\
+    error_list = "\n".join([f"- {d['name']}" for d in assessment_data['indicator_details'] if d['assessment'] == 'Error'])
+    
+    summary_text = (
+        f"Based on a technical analysis of several key indicators, the overall sentiment for {symbol} is **{assessment_data['overall_sentiment']}**.\n\n"
+        f"**Live Price:** ${current_price:,.2f}\n\n"
+        f"**Indicator Assessments:**\n"
+        f"{indicator_list}\n"
+    )
+
+    if error_count > 0:
+        summary_text += f"\n**Note:** I encountered errors fetching data for the following indicators:\n{error_list}"
+
+    assessment_data['summary'] = summary_text
+    
+    return {"text": json.dumps(assessment_data, indent=2)}
+
+# --- NEW: Candlestick Pattern Analysis Function ---
+async def analyze_candlestick_patterns(symbol, interval='1day', outputsize='100'):
+    """
+    Analyzes historical data for common candlestick patterns.
+    """
+    patterns_found = []
+    
+    try:
+        historical_data_response = await _fetch_data_from_twelve_data(
+            data_type='historical', 
+            symbol=symbol, 
+            interval=interval, 
+            outputsize=outputsize
+        )
+        historical_values = historical_data_response['data'].get('values', [])
+        
+        if len(historical_values) < 2:
+            return {"text": f"Not enough historical data to analyze candlestick patterns for {symbol}."}
+        
+        # Helper function to convert data to floats
+        def convert_to_float(candle):
+            return {k: float(v) for k, v in candle.items() if k not in ['datetime']}
+
+        # Loop through the data to find patterns
+        for i in range(len(historical_values) - 1):
+            current_candle = convert_to_float(historical_values[i])
+            previous_candle = convert_to_float(historical_values[i+1])
+            
+            open_c = current_candle['open']
+            high_c = current_candle['high']
+            low_c = current_candle['low']
+            close_c = current_candle['close']
+            datetime_c = historical_values[i]['datetime']
+            
+            open_p = previous_candle['open']
+            close_p = previous_candle['close']
+
+            # Check for Doji (open and close are very close)
+            if abs(open_c - close_c) < (high_c - low_c) * 0.1:
+                patterns_found.append({"pattern": "Doji", "date": datetime_c, "description": "A sign of indecision in the market."})
+
+            # Check for Bullish Engulfing
+            if close_c > open_c and open_p > close_p and open_c < close_p and close_c > open_p:
+                patterns_found.append({"pattern": "Bullish Engulfing", "date": datetime_c, "description": "A bullish reversal pattern where a large green candle engulfs the previous red candle."})
+
+            # Check for Bearish Engulfing
+            if close_c < open_c and open_p < close_p and open_c > close_p and close_c < open_p:
+                patterns_found.append({"pattern": "Bearish Engulfing", "date": datetime_c, "description": "A bearish reversal pattern where a large red candle engulfs the previous green candle."})
+                
+            # Check for Hammer/Hanging Man (Small body, long lower shadow)
+            body_size = abs(open_c - close_c)
+            total_range = high_c - low_c
+            lower_shadow = min(open_c, close_c) - low_c
+            
+            if body_size < total_range * 0.3 and lower_shadow > body_size * 2:
+                # Hammer or Hanging Man, depending on the trend
+                pattern_name = "Hammer" if close_c > previous_candle['close'] else "Hanging Man"
+                patterns_found.append({"pattern": pattern_name, "date": datetime_c, "description": "A potential reversal pattern with a small body and a long lower shadow."})
+                
+    except Exception as e:
+        return {"text": f"An error occurred during candlestick pattern analysis: {e}"}
+        
+    if not patterns_found:
+        return {"text": f"No common candlestick patterns found in the last {outputsize} data points for {symbol}."}
+    
+    return {"text": json.dumps({"symbol": symbol, "patterns": patterns_found}, indent=2)}
+
+@client.event
+async def on_message(message):
+    """Event that fires when a message is sent in a channel the bot can see."""
+    if message.author == client.user:
+        return
+    
+    AUTHORIZED_USER_IDS = ["918556208217067561", "YOUR_FRIEND_DISCORD_ID_2"]
+    if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in AUTHORIZED_USER_IDS:
+        print(f"Ignoring DM from unauthorized user: {message.author.id}")
+        return
+
+    user_id = str(message.author.id)
+    user_query = message.content.strip()
+    print(f"Received message: '{user_query}' from {message.author} (ID: {user_id})")
+
+    if user_id not in conversation_histories:
+        conversation_histories[user_id] = []
+    
+    conversation_histories[user_id].append({"role": "user", "parts": [{"text": user_query}]})
+    current_chat_history = conversation_histories[user_id][-MAX_CONVERSATION_TURNS:]
+
+    response_text_for_discord = "I'm currently unavailable. Please try again later."
+
+    try:
+        # --- Updated LLM Tool Definitions ---
+        tools = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "get_market_data",
+                        "description": "Fetches live price, historical data, or technical analysis indicators for a given symbol, or market news for a query.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." },
+                                "data_type": { "type": "string", "enum": ["live", "historical", "indicator", "news"], "description": "Type of data to fetch (live, historical, indicator, news). This is required." },
+                                "interval": { "type": "string", "description": "Time interval (e.g., '1min', '1day'). Default to '1day' if not specified by user. Try to infer from context." },
+                                "outputsize": { "type": "string", "description": "Number of data points. Default to '50' for historical, adjusted for indicator." },
+                                "indicator": { "type": "string", "enum": ["SMA", "EMA", "RSI", "MACD", "BBANDS", "STOCHRSI", "SUPERTREND", "VWAP", "SAR", "PIVOT_POINTS", "ULTOSC"], "description": "Name of the technical indicator. Required if data_type is 'indicator'." },
+                                "indicator_period": { "type": "string", "description": "Period for the indicator (e.g., '14', '20', '50'). Default to '14' if not specified by user. For SMA or EMA, the LLM should infer a period like '50' or '200' if the user mentions 'golden cross' or a specific time frame." },
+                                "indicator_multiplier": { "type": "string", "description": "Multiplier for indicators like Supertrend. Default to '3'."},
+                                "news_query": { "type": "string", "description": "Keywords for news search." },
+                                "from_date": { "type": "string", "description": "Start date for news (YYYY-MM-DD). Defaults to 7 days ago." },
+                                "sort_by": { "type": "string", "enum": ["relevancy", "popularity", "publishedAt"], "description": "How to sort news." },
+                                "news_language": { "type": "string", "description": "Language of news." }
+                            },
+                            "required": ["symbol", "data_type"]
+                        }
+                    },
+                    {
+                        "name": "perform_overall_assessment",
+                        "description": "Provides a comprehensive technical analysis of an asset and gives a final sentiment of 'Bullish', 'Bearish', or 'Neutral' based on multiple indicators.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." }
+                            },
+                            "required": ["symbol"]
+                        }
+                    },
+                    {
+                        "name": "analyze_candlestick_patterns",
+                        "description": "Analyzes historical price data for common candlestick patterns like Doji, Hammer, and Bullish/Bearish Engulfing.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": { "type": "string", "description": "The ticker symbol for the asset (e.g., 'BTC/USD')." },
+                                "interval": { "type": "string", "description": "The time interval for the historical data (e.g., '1day', '1week'). Default is '1day'." }
+                            },
+                            "required": ["symbol"]
+                        }
+                    }
+                ]
+            }
+        ]
+
+        llm_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
+        
+        llm_payload_first_turn = {
+            "contents": current_chat_history,
+            "tools": tools,
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ]
+        }
+
+        try:
+            llm_response_first_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_first_turn)
+            llm_response_first_turn.raise_for_status()
+            llm_data_first_turn = llm_response_first_turn.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error connecting to Gemini LLM (first turn): {e}")
+            response_text_for_discord = f"I'm having trouble connecting to my AI brain. Please check the GOOGLE_API_KEY and try again later. Error: {e}"
+            for chunk in split_message(response_text_for_discord):
+                await message.channel.send(chunk)
+            return
+
+        if llm_data_first_turn and llm_data_first_turn.get('candidates'):
+            candidate_first_turn = llm_data_first_turn['candidates'][0]
+            if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
+                parts_first_turn = candidate_first_turn['content']['parts']
+                if parts_first_turn:
+                    if parts_first_turn[0].get('functionCall'):
+                        function_call = parts_first_turn[0]['functionCall']
+                        function_name = function_call['name']
+                        function_args = function_call['args']
+
+                        print(f"LLM requested tool call: {function_name} with args: {function_args}")
+                        current_chat_history.append({"role": "model", "parts": [{"functionCall": function_call}]})
+
+                        tool_output_text = ""
+                        try:
+                            if function_name == "get_market_data":
+                                if 'indicator_period' not in function_args:
+                                    if function_args.get('indicator', '').upper() == 'MACD':
+                                        function_args['indicator_period'] = '0'
+                                    elif 'ma' in user_query.lower() and ('50' in user_query or '200' in user_query):
+                                        period = re.search(r'\b(50|200)\b', user_query)
+                                        function_args['indicator_period'] = period.group(1) if period else '14'
+                                    else:
+                                        function_args['indicator_period'] = '14'
+                                
+                                for key, value in function_args.items():
+                                    function_args[key] = str(value)
+                                
+                                tool_output_data_raw = await _fetch_data_from_twelve_data(**function_args)
+                                tool_output_text = json.dumps(tool_output_data_raw, indent=2)
+                            
+                            elif function_name == "analyze_candlestick_patterns":
+                                symbol_arg = function_args.get('symbol')
+                                interval_arg = function_args.get('interval', '1day')
+                                tool_output_data_raw = await analyze_candlestick_patterns(
+                                    symbol=str(symbol_arg), 
+                                    interval=str(interval_arg)
+                                )
+                                tool_output_text = tool_output_data_raw['text']
+
+                            elif function_name == "perform_overall_assessment":
+                                tool_output_data_raw = await perform_overall_assessment(**function_args)
+                                tool_output_text = json.dumps(tool_output_data_raw, indent=2)
+                            else:
+                                tool_output_text = json.dumps({"error": f"AI requested an unknown function: {function_name}"})
+                        except Exception as e:
+                            print(f"Error during tool execution: {e}")
+                            tool_output_text = json.dumps({"error": f"Error during tool execution: {e}"})
+
+                        current_chat_history.append({"role": "function", "parts": [{"functionResponse": {"name": function_name, "response": {"text": tool_output_text}}}]})
+
+                        llm_payload_second_turn = {
+                            "contents": current_chat_history,
+                            "tools": tools,
+                            "safetySettings": [
+                                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                            ]
+                        }
+                        
+                        try:
+                            llm_response_second_turn = requests.post(llm_api_url, headers={'Content-Type': 'application/json'}, json=llm_payload_second_turn)
+                            llm_response_second_turn.raise_for_status()
+                            llm_data_second_turn = llm_response_second_turn.json()
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error connecting to AI brain (second turn after tool): {e}")
+                            response_text_for_discord = f"I received the data, but I'm having trouble processing it with my AI brain. Please try again later. Error: {e}"
+                            for chunk in split_message(response_text_for_discord):
+                                await message.channel.send(chunk)
+                            return
+                        
+                        if llm_data_second_turn and llm_data_second_turn.get('candidates'):
+                            final_candidate = llm_data_second_turn['candidates'][0]
+                            if final_candidate.get('content') and final_candidate['content'].get('parts'):
+                                response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
+                            else:
+                                print(f"LLM second turn: No text content in response. Full response: {llm_data_second_turn}")
+                                block_reason = llm_data_second_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
+                                response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
+                        else:
+                            response_text_for_discord = "Could not get a valid second response from the AI."
+
+                    elif parts_first_turn[0].get('text'):
+                        response_text_for_discord = parts_first_turn[0]['text']
+                    else:
+                        print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
+                        block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
+                        response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
+                else:
+                    response_text_for_discord = "AI did not provide content in its response."
+            else:
+                response_text_for_discord = "Could not get a valid response from the AI. Please try again."
+                if llm_data_first_turn.get('promptFeedback') and llm_data_first_turn['promptFeedback'].get('blockReason'):
+                    response_text_for_discord += f" (Blocked: {llm_data_first_turn['promptFeedback']['blockReason']})"
+            
+            conversation_histories[user_id].append({"role": "model", "parts": [{"text": response_text_for_discord}]})
+        
+    except requests.exceptions.RequestException as e:
+        print(f"General Request Error: {e}")
+        response_text_for_discord = f"An unexpected connection error occurred. Please check network connectivity or API URLs. Error: {e}"
+    except Exception as e:
+        print(f"An unexpected error occurred in bot logic: {e}")
+        response_text_for_discord = f"An unexpected error occurred while processing your request. My apologies. Error: {e}"
+
+    for chunk in split_message(response_text_for_discord):
+        await message.channel.send(chunk)
+
+if __name__ == '__main__':
+    if not DISCORD_BOT_TOKEN:
+        print("Error: DISCORD_BOT_TOKEN environment variable not set.")
+    elif not TWELVE_DATA_API_KEY:
+        print("Error: TWELVE_DATA_API_KEY environment variable not set.")
+    elif not GOOGLE_API_KEY:
+        print("Error: GOOGLE_API_KEY environment variable not set.")
+    elif not NEWS_API_KEY:
+        print("Error: NEWS_API_KEY environment variable not set.")
+    else:
+        client.run(DISCORD_BOT_TOKEN)
