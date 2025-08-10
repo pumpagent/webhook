@@ -351,8 +351,8 @@ async def perform_overall_assessment(symbol):
             # --- Analysis Logic for each indicator ---
             if 'rsi' in data:
                 value = float(data['rsi'])
-                # Bullish in "sweet spot" (30-70)
-                if value >= 30 and value <= 70:
+                # Bullish in "sweet spot" (30-70) or Oversold (<30)
+                if (value >= 30 and value <= 70) or value < 30:
                     sub_assessment = "Bullish"
                 # Bearish if overbought (>85) or oversold (<30)
                 elif value > 85 or value < 30:
@@ -367,17 +367,6 @@ async def perform_overall_assessment(symbol):
                     sub_assessment = "Bullish"
                 elif macd_line < signal_line: # Bearish if MACD line is below Signal line
                     sub_assessment = "Bearish"
-            elif 'upper' in data and 'middle' in data and 'lower' in data and current_price is not None:
-                upper_band = float(data['upper'])
-                middle_band = float(data['middle'])
-                lower_band = float(data['lower'])
-                # Bullish if price is between middle and upper band, or above upper band
-                if (current_price > middle_band and current_price <= upper_band) or (current_price > upper_band):
-                    sub_assessment = "Bullish"
-                elif current_price < lower_band:
-                    sub_assessment = "Bearish"
-                else: # Price between lower and middle band
-                    sub_assessment = "Neutral"
             elif 'supertrend' in data and current_price is not None:
                 supertrend_value = float(data['supertrend'])
                 if current_price > supertrend_value: sub_assessment = "Bullish"
@@ -386,14 +375,6 @@ async def perform_overall_assessment(symbol):
                 value = float(data['value'])
                 # Bullish if price is trading above SMA/EMA
                 if current_price > value:
-                    sub_assessment = "Bullish"
-                else:
-                    sub_assessment = "Bearish"
-            elif 'stochrsi' in data and 'stochrsi_signal' in data:
-                stoch_k = float(data['stochrsi'])
-                stoch_d = float(data['stochrsi_signal'])
-                # Bullish if K line has crossed above D line (current K > current D)
-                if stoch_k > stoch_d: # Simplified cross above check
                     sub_assessment = "Bullish"
                 else:
                     sub_assessment = "Bearish"
