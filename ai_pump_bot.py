@@ -269,7 +269,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
             news_data = response.json()
 
             if news_data.get('status') == 'error':
-                error_message = news_data.get('message', 'Unknown error from News API.')
+                error_message = data.get('message', 'Unknown error from News API.')
                 raise requests.exceptions.RequestException(f"News API error: {error_message}")
             
             articles = news_data.get('articles')
@@ -301,7 +301,7 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
 # --- New Function for Overall Assessment ---
 async def perform_overall_assessment(symbol):
     """
-    Performs a technical analysis using multiple indicators to provide an overall assessment.
+    Performs a technical analysis using a specific set of indicators to provide an overall assessment.
     Returns a dictionary with the assessment and a summary text.
     """
     assessment_data = {
@@ -325,15 +325,13 @@ async def perform_overall_assessment(symbol):
         return {"text": json.dumps(assessment_data, indent=2)}
 
     # 2. Get Indicators and store values
+    # Updated to only include the requested indicators
     indicators_to_check = {
         'RSI': {'period': '14', 'description': 'Relative Strength Index'},
         'MACD': {'period': '0', 'description': 'Moving Average Convergence Divergence'},
-        'BBANDS': {'period': '20', 'description': 'Bollinger Bands'},
         'SUPERTREND': {'period': '10', 'multiplier': '3', 'description': 'Supertrend'},
         'SMA_50': {'indicator': 'SMA', 'period': '50', 'description': '50-period Simple Moving Average'},
         'SMA_200': {'indicator': 'SMA', 'period': '200', 'description': '200-period Simple Moving Average'},
-        'EMA': {'period': '20', 'description': '20-period Exponential Moving Average'},
-        'STOCHRSI': {'period': '14', 'description': 'Stochastic Relative Strength Index'},
         'VWAP': {'period': '0', 'description': 'Volume Weighted Average Price'},
     }
     
@@ -353,50 +351,30 @@ async def perform_overall_assessment(symbol):
             # --- Analysis Logic for each indicator ---
             if 'rsi' in data:
                 value = float(data['rsi'])
-                # Bullish if in "Sweet Spot" (30-70) or Oversold (<30)
-                if (value >= 30 and value <= 70) or value < 30:
+                if value >= 30 and value <= 70:
                     sub_assessment = "Bullish"
-                elif value > 70:
+                elif value > 85 or value < 30:
                     sub_assessment = "Bearish"
+                else:
+                    sub_assessment = "Neutral"
             elif 'macd' in data and 'signal' in data:
                 macd_line = float(data['macd'])
                 signal_line = float(data['signal'])
-                # Bullish if MACD line is above Signal line
                 if macd_line > signal_line:
                     sub_assessment = "Bullish"
-                elif macd_line < signal_line: # Bearish if MACD line is below Signal line
+                elif macd_line < signal_line:
                     sub_assessment = "Bearish"
-            elif 'upper' in data and 'middle' in data and 'lower' in data and current_price is not None:
-                upper_band = float(data['upper'])
-                middle_band = float(data['middle'])
-                lower_band = float(data['lower'])
-                # Bullish if price is between middle and upper band, or above upper band
-                if (current_price > middle_band and current_price <= upper_band) or (current_price > upper_band):
-                    sub_assessment = "Bullish"
-                elif current_price < lower_band:
-                    sub_assessment = "Bearish"
-                else: # Price between lower and middle band
-                    sub_assessment = "Neutral"
-            elif 'supertrend' in data and current_price is not None:
+            elif indicator_name == 'SUPERTREND' and current_price is not None:
                 supertrend_value = float(data['supertrend'])
                 if current_price > supertrend_value: sub_assessment = "Bullish"
                 else: sub_assessment = "Bearish"
-            elif 'value' in data and current_price is not None:
+            elif api_indicator_name == 'SMA' and current_price is not None:
                 value = float(data['value'])
-                # Bullish if price is trading above SMA/EMA
                 if current_price > value:
                     sub_assessment = "Bullish"
                 else:
                     sub_assessment = "Bearish"
-            elif 'stochrsi' in data and 'stochrsi_signal' in data:
-                stoch_k = float(data['stochrsi'])
-                stoch_d = float(data['stochrsi_signal'])
-                # Bullish if K line has crossed above D line (current K > current D)
-                if stoch_k > stoch_d: # Simplified cross above check
-                    sub_assessment = "Bullish"
-                else:
-                    sub_assessment = "Bearish"
-            elif 'vwap' in data and current_price is not None:
+            elif indicator_name == 'VWAP' and current_price is not None:
                 value = float(data['vwap'])
                 if current_price > value: sub_assessment = "Bullish"
                 else: sub_assessment = "Bearish"
