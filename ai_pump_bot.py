@@ -351,7 +351,7 @@ async def perform_overall_assessment(symbol):
             # --- Analysis Logic for each indicator ---
             if 'rsi' in data:
                 value = float(data['rsi'])
-                if value >= 30 and value <= 70:
+                if (value >= 30 and value <= 70) or value < 30:
                     sub_assessment = "Bullish"
                 elif value > 85 or value < 30:
                     sub_assessment = "Bearish"
