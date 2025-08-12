@@ -330,9 +330,14 @@ async def perform_overall_assessment(symbol):
         'RSI': {'period': '14', 'description': 'Relative Strength Index'},
         'MACD': {'period': '0', 'description': 'Moving Average Convergence Divergence'},
         'SUPERTREND': {'period': '10', 'multiplier': '3', 'description': 'Supertrend'},
+        'VWAP': {'period': '0', 'description': 'Volume Weighted Average Price'},
+    }
+
+    # Add the moving averages to the list of indicators to check
+    # Note: These are separate from the main list as they have different analysis logic
+    ma_indicators = {
         'SMA_50': {'indicator': 'SMA', 'period': '50', 'description': '50-period Simple Moving Average'},
         'SMA_200': {'indicator': 'SMA', 'period': '200', 'description': '200-period Simple Moving Average'},
-        'VWAP': {'period': '0', 'description': 'Volume Weighted Average Price'},
     }
     
     for indicator_name, config in indicators_to_check.items():
@@ -368,12 +373,6 @@ async def perform_overall_assessment(symbol):
                 supertrend_value = float(data['supertrend'])
                 if current_price > supertrend_value: sub_assessment = "Bullish"
                 else: sub_assessment = "Bearish"
-            elif api_indicator_name == 'SMA' and current_price is not None:
-                value = float(data['value'])
-                if current_price > value:
-                    sub_assessment = "Bullish"
-                else:
-                    sub_assessment = "Bearish"
             elif indicator_name == 'VWAP' and current_price is not None:
                 value = float(data['vwap'])
                 if current_price > value: sub_assessment = "Bullish"
@@ -393,6 +392,39 @@ async def perform_overall_assessment(symbol):
                 'assessment': 'Error'
             })
 
+    # Add MA's to the list with the correct logic.
+    for indicator_name, config in ma_indicators.items():
+        try:
+            api_indicator_name = config['indicator']
+            indicator_data_response = await _fetch_data_from_twelve_data(
+                data_type='indicator', symbol=symbol, indicator=api_indicator_name,
+                indicator_period=config['period']
+            )
+            data = indicator_data_response['data']
+            
+            sub_assessment = "Neutral"
+            value = None
+            
+            if 'value' in data and current_price is not None:
+                value = float(data['value'])
+                if current_price > value:
+                    sub_assessment = "Bullish"
+                else:
+                    sub_assessment = "Bearish"
+                    
+            assessment_data['indicator_details'].append({
+                'name': config['description'],
+                'value': value if value is not None else data,
+                'assessment': sub_assessment
+            })
+        except Exception as e:
+            print(f"Failed to fetch or parse {indicator_name} for {symbol}: {e}")
+            assessment_data['indicator_details'].append({
+                'name': config['description'],
+                'value': 'N/A',
+                'assessment': 'Error'
+            })
+    
     # 3. Final Assessment
     bullish_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Bullish')
     bearish_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Bearish')
