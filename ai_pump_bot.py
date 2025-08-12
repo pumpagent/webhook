@@ -332,13 +332,6 @@ async def perform_overall_assessment(symbol):
         'SUPERTREND': {'period': '10', 'multiplier': '3', 'description': 'Supertrend'},
         'VWAP': {'period': '0', 'description': 'Volume Weighted Average Price'},
     }
-
-    # Add the moving averages to the list of indicators to check
-    # Note: These are separate from the main list as they have different analysis logic
-    ma_indicators = {
-        'SMA_50': {'indicator': 'SMA', 'period': '50', 'description': '50-period Simple Moving Average'},
-        'SMA_200': {'indicator': 'SMA', 'period': '200', 'description': '200-period Simple Moving Average'},
-    }
     
     for indicator_name, config in indicators_to_check.items():
         try:
@@ -393,6 +386,10 @@ async def perform_overall_assessment(symbol):
             })
 
     # Add MA's to the list with the correct logic.
+    ma_indicators = {
+        'SMA_50': {'indicator': 'SMA', 'period': '50', 'description': '50-period Simple Moving Average'},
+        'SMA_200': {'indicator': 'SMA', 'period': '200', 'description': '200-period Simple Moving Average'},
+    }
     for indicator_name, config in ma_indicators.items():
         try:
             api_indicator_name = config['indicator']
