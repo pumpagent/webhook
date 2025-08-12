@@ -27,7 +27,8 @@ TWELVE_DATA_MIN_INTERVAL = 1
 last_news_api_call = 0
 NEWS_API_MIN_INTERVAL = 1
 api_response_cache = {}
-CACHE_DURATION = 10
+# Forcing a very short cache duration for live price data to prevent staleness.
+CACHE_DURATION = 10 # seconds
 
 # --- Conversation Memory (In-memory, volatile on bot restart) ---
 conversation_histories = {}
@@ -83,6 +84,8 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     """
     Helper function to fetch data directly from Twelve Data API or NewsAPI.org.
     Includes rate limiting and caching.
+    
+    CRITICAL FIX: For live price data, we will bypass the cache to ensure we always get a fresh value.
     """
     global last_twelve_data_call, last_news_api_call
 
@@ -90,7 +93,8 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                  indicator_multiplier, news_query, from_date, sort_by, news_language)
     current_time = time.time()
 
-    if cache_key in api_response_cache:
+    # Bypass cache for live price requests to ensure fresh data
+    if data_type != 'live' and cache_key in api_response_cache:
         cached_data = api_response_cache[cache_key]
         if (current_time - cached_data['timestamp']) < CACHE_DURATION:
             print(f"Serving cached response for {data_type} request to data service.")
