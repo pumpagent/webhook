@@ -325,7 +325,7 @@ async def perform_overall_assessment(symbol):
         return {"text": json.dumps(assessment_data, indent=2)}
 
     # 2. Get Indicators and store values
-    # Updated to only include the requested indicators
+    # Corrected list to only include the requested indicators for the overall assessment
     indicators_to_check = {
         'RSI': {'period': '14', 'description': 'Relative Strength Index'},
         'MACD': {'period': '0', 'description': 'Moving Average Convergence Divergence'},
@@ -349,7 +349,7 @@ async def perform_overall_assessment(symbol):
             # --- Analysis Logic for each indicator ---
             if 'rsi' in data:
                 value = float(data['rsi'])
-                if (value >= 30 and value <= 70) or value < 30:
+                if value >= 30 and value <= 70:
                     sub_assessment = "Bullish"
                 elif value > 85 or value < 30:
                     sub_assessment = "Bearish"
@@ -377,43 +377,6 @@ async def perform_overall_assessment(symbol):
                 'assessment': sub_assessment
             })
 
-        except Exception as e:
-            print(f"Failed to fetch or parse {indicator_name} for {symbol}: {e}")
-            assessment_data['indicator_details'].append({
-                'name': config['description'],
-                'value': 'N/A',
-                'assessment': 'Error'
-            })
-
-    # Add MA's to the list with the correct logic.
-    ma_indicators = {
-        'SMA_50': {'indicator': 'SMA', 'period': '50', 'description': '50-period Simple Moving Average'},
-        'SMA_200': {'indicator': 'SMA', 'period': '200', 'description': '200-period Simple Moving Average'},
-    }
-    for indicator_name, config in ma_indicators.items():
-        try:
-            api_indicator_name = config['indicator']
-            indicator_data_response = await _fetch_data_from_twelve_data(
-                data_type='indicator', symbol=symbol, indicator=api_indicator_name,
-                indicator_period=config['period']
-            )
-            data = indicator_data_response['data']
-            
-            sub_assessment = "Neutral"
-            value = None
-            
-            if 'value' in data and current_price is not None:
-                value = float(data['value'])
-                if current_price > value:
-                    sub_assessment = "Bullish"
-                else:
-                    sub_assessment = "Bearish"
-                    
-            assessment_data['indicator_details'].append({
-                'name': config['description'],
-                'value': value if value is not None else data,
-                'assessment': sub_assessment
-            })
         except Exception as e:
             print(f"Failed to fetch or parse {indicator_name} for {symbol}: {e}")
             assessment_data['indicator_details'].append({
