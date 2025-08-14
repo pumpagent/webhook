@@ -480,6 +480,92 @@ async def analyze_candlestick_patterns(symbol, interval='1day', outputsize='100'
                 pattern_name = "Hammer" if close_c > previous_candle['close'] else "Hanging Man"
                 patterns_found.append({"pattern": pattern_name, "date": datetime_c, "description": "A potential reversal pattern with a small body and a long lower shadow."})
                 
+            # Inverse Head and Shoulders
+            if i >= 4:
+                # Check for left shoulder
+                left_shoulder_high = historical_values[i+4]['high']
+                left_shoulder_low = historical_values[i+4]['low']
+                # Check for head
+                head_high = historical_values[i+2]['high']
+                head_low = historical_values[i+2]['low']
+                # Check for right shoulder
+                right_shoulder_high = historical_values[i]['high']
+                right_shoulder_low = historical_values[i]['low']
+                # Check for neckline
+                neckline_high = (historical_values[i+3]['high'] + historical_values[i+1]['high']) / 2
+                # Check for breakout
+                if left_shoulder_low > head_low and right_shoulder_low > head_low and head_low < neckline_high and close_c > neckline_high:
+                    patterns_found.append({"pattern": "Inverse Head and Shoulders", "date": datetime_c, "description": "A bullish reversal pattern signaling a potential bottoming process."})
+
+            # Head and Shoulders
+            if i >= 4:
+                # Check for left shoulder
+                left_shoulder_high = historical_values[i+4]['high']
+                left_shoulder_low = historical_values[i+4]['low']
+                # Check for head
+                head_high = historical_values[i+2]['high']
+                head_low = historical_values[i+2]['low']
+                # Check for right shoulder
+                right_shoulder_high = historical_values[i]['high']
+                right_shoulder_low = historical_values[i]['low']
+                # Check for neckline
+                neckline_low = (historical_values[i+3]['low'] + historical_values[i+1]['low']) / 2
+                # Check for breakout
+                if left_shoulder_high < head_high and right_shoulder_high < head_high and head_high > neckline_low and close_c < neckline_low:
+                    patterns_found.append({"pattern": "Head and Shoulders", "date": datetime_c, "description": "A bearish reversal pattern signaling a potential top."})
+
+            # Double Bottom
+            if i >= 4:
+                # Check for first bottom
+                first_bottom = historical_values[i+4]['low']
+                # Check for middle high
+                middle_high = historical_values[i+2]['high']
+                # Check for second bottom
+                second_bottom = historical_values[i]['low']
+                # Check for breakout
+                if abs(first_bottom - second_bottom) < first_bottom * 0.1 and first_bottom < middle_high and second_bottom < middle_high and close_c > middle_high:
+                    patterns_found.append({"pattern": "Double Bottom", "date": datetime_c, "description": "A bullish reversal pattern signaling a potential bottoming process."})
+
+            # Double Top
+            if i >= 4:
+                # Check for first top
+                first_top = historical_values[i+4]['high']
+                # Check for middle low
+                middle_low = historical_values[i+2]['low']
+                # Check for second top
+                second_top = historical_values[i]['high']
+                # Check for breakout
+                if abs(first_top - second_top) < first_top * 0.1 and first_top > middle_low and second_top > middle_low and close_c < middle_low:
+                    patterns_found.append({"pattern": "Double Top", "date": datetime_c, "description": "A bearish reversal pattern signaling a potential top."})
+            
+            # Cup and Handle
+            if i >= 10:
+                # Check for cup shape (a 'U' shape)
+                cup_start = historical_values[i+10]
+                cup_end = historical_values[i+2]
+                cup_bottom = min(historical_values[i+10:i+2], key=lambda x: float(x['low']))
+                # Check for handle (a small downward drift)
+                handle_start = historical_values[i+2]
+                handle_end = historical_values[i]
+                
+                # Simplified logic for detection
+                if float(cup_start['close']) > float(cup_bottom['low']) and float(cup_end['close']) > float(cup_bottom['low']) and float(handle_end['close']) < float(handle_start['close']) and close_c > float(cup_end['close']):
+                    patterns_found.append({"pattern": "Cup and Handle", "date": datetime_c, "description": "A bullish continuation pattern."})
+
+            # Inverse Cup and Handle
+            if i >= 10:
+                # Check for cup shape (an inverted 'U' shape)
+                cup_start = historical_values[i+10]
+                cup_end = historical_values[i+2]
+                cup_top = max(historical_values[i+10:i+2], key=lambda x: float(x['high']))
+                # Check for handle (a small upward drift)
+                handle_start = historical_values[i+2]
+                handle_end = historical_values[i]
+                
+                # Simplified logic for detection
+                if float(cup_start['close']) < float(cup_top['high']) and float(cup_end['close']) < float(cup_top['high']) and float(handle_end['close']) > float(handle_start['close']) and close_c < float(cup_end['close']):
+                    patterns_found.append({"pattern": "Inverse Cup and Handle", "date": datetime_c, "description": "A bearish continuation pattern."})
+                
     except Exception as e:
         return {"text": f"An error occurred during candlestick pattern analysis: {e}"}
         
@@ -491,13 +577,13 @@ async def analyze_candlestick_patterns(symbol, interval='1day', outputsize='100'
 # --- NEW: Golden Cross Analysis Function ---
 async def check_golden_cross(symbol, interval='1day'):
     """
-    Checks if a golden cross has occurred for a given symbol by fetching 50 and 200-period SMAs sequentially.
+    Checks if a golden cross has occurred for a given symbol by fetching 50 and 200-period SMAs separately.
     """
     ma_50_value = None
     ma_200_value = None
 
+    # Fetch 50-period SMA
     try:
-        # Fetch 50-period SMA
         ma_50_response = await _fetch_data_from_twelve_data(
             data_type='indicator',
             symbol=symbol,
@@ -514,8 +600,8 @@ async def check_golden_cross(symbol, interval='1day'):
     # Add a delay to avoid rate limiting
     await asyncio.sleep(2)
 
+    # Fetch 200-period SMA
     try:
-        # Fetch 200-period SMA
         ma_200_response = await _fetch_data_from_twelve_data(
             data_type='indicator',
             symbol=symbol,
