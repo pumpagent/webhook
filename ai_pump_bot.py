@@ -353,7 +353,7 @@ async def perform_overall_assessment(symbol):
             # --- Analysis Logic for each indicator ---
             if 'rsi' in data:
                 value = float(data['rsi'])
-                if (value >= 30 and value <= 70) or value < 30:
+                if value >= 30 and value <= 70:
                     sub_assessment = "Bullish"
                 elif value > 85 or value < 30:
                     sub_assessment = "Bearish"
@@ -488,13 +488,65 @@ async def analyze_candlestick_patterns(symbol, interval='1day', outputsize='100'
     
     return {"text": json.dumps({"symbol": symbol, "patterns": patterns_found}, indent=2)}
 
+# --- NEW: Golden Cross Analysis Function ---
+async def check_golden_cross(symbol, interval='1day'):
+    """
+    Checks if a golden cross has occurred for a given symbol by fetching 50 and 200-period SMAs sequentially.
+    """
+    ma_50_value = None
+    ma_200_value = None
+
+    try:
+        # Fetch 50-period SMA
+        ma_50_response = await _fetch_data_from_twelve_data(
+            data_type='indicator',
+            symbol=symbol,
+            indicator='SMA',
+            indicator_period='50',
+            interval=interval
+        )
+        ma_50_value = float(ma_50_response['data'].get('value'))
+        print(f"Successfully fetched 50-period SMA: {ma_50_value}")
+    except Exception as e:
+        print(f"Failed to fetch 50-period SMA: {e}")
+        return {"text": f"An error occurred while fetching the 50-period SMA: {e}"}
+
+    # Add a delay to avoid rate limiting
+    await asyncio.sleep(2)
+
+    try:
+        # Fetch 200-period SMA
+        ma_200_response = await _fetch_data_from_twelve_data(
+            data_type='indicator',
+            symbol=symbol,
+            indicator='SMA',
+            indicator_period='200',
+            interval=interval
+        )
+        ma_200_value = float(ma_200_response['data'].get('value'))
+        print(f"Successfully fetched 200-period SMA: {ma_200_value}")
+    except Exception as e:
+        print(f"Failed to fetch 200-period SMA: {e}")
+        return {"text": f"An error occurred while fetching the 200-period SMA: {e}"}
+    
+    # Check for a golden cross condition
+    if ma_50_value is not None and ma_200_value is not None:
+        if ma_50_value > ma_200_value:
+            result = f"A golden cross has occurred for {symbol}. The 50-period SMA ({ma_50_value:,.2f}) is above the 200-period SMA ({ma_200_value:,.2f})."
+        else:
+            result = f"A golden cross has not occurred for {symbol}. The 50-period SMA ({ma_50_value:,.2f}) is below the 200-period SMA ({ma_200_value:,.2f})."
+        return {"text": result}
+    else:
+        return {"text": "Could not retrieve both moving averages to check for a golden cross."}
+
+
 @client.event
 async def on_message(message):
     """Event that fires when a message is sent in a channel the bot can see."""
     if message.author == client.user:
         return
     
-    AUTHORIZED_USER_IDS = ["918556208217067561", "1062318683386552402"]
+    AUTHORIZED_USER_IDS = ["918556208217067561", "YOUR_FRIEND_DISCORD_ID_2"]
     if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in AUTHORIZED_USER_IDS:
         print(f"Ignoring DM from unauthorized user: {message.author.id}")
         return
@@ -556,6 +608,18 @@ async def on_message(message):
                             "properties": {
                                 "symbol": { "type": "string", "description": "The ticker symbol for the asset (e.g., 'BTC/USD')." },
                                 "interval": { "type": "string", "description": "The time interval for the historical data (e.g., '1day', '1week'). Default is '1day'." }
+                            },
+                            "required": ["symbol"]
+                        }
+                    },
+                    {
+                        "name": "check_golden_cross",
+                        "description": "Checks if a Golden Cross has occurred, which is a bullish signal where the 50-day SMA crosses above the 200-day SMA.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": { "type": "string", "description": "The ticker symbol for the asset (e.g., 'BTC/USD')." },
+                                "interval": { "type": "string", "description": "The time interval for the moving averages. Defaults to '1day'." }
                             },
                             "required": ["symbol"]
                         }
@@ -623,6 +687,15 @@ async def on_message(message):
                                 symbol_arg = function_args.get('symbol')
                                 interval_arg = function_args.get('interval', '1day')
                                 tool_output_data_raw = await analyze_candlestick_patterns(
+                                    symbol=str(symbol_arg), 
+                                    interval=str(interval_arg)
+                                )
+                                tool_output_text = tool_output_data_raw['text']
+
+                            elif function_name == "check_golden_cross":
+                                symbol_arg = function_args.get('symbol')
+                                interval_arg = function_args.get('interval', '1day')
+                                tool_output_data_raw = await check_golden_cross(
                                     symbol=str(symbol_arg), 
                                     interval=str(interval_arg)
                                 )
