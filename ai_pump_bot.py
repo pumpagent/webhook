@@ -589,31 +589,21 @@ async def check_golden_cross(symbol, interval='1day'):
             indicator_period='50,200', # Twelve Data supports multiple periods in one request
             interval=interval
         )
-        data = ma_response['data'].get('values', [])
-        
-        if len(data) < 2:
-            return {"text": "Not enough data to check for a golden cross."}
+        # Twelve Data's response for multi-period requests is often a dictionary, not a list.
+        # We need to handle this correctly.
+        data = ma_response['data']
 
-        # The data is returned with the most recent first, so we check the first two entries
-        # for a crossover. We need the value from the 50 and 200 SMA
         ma_50_value = None
         ma_200_value = None
+
+        # Try to parse the values directly from the dictionary keys
+        ma_50_data = data.get('50', None)
+        ma_200_data = data.get('200', None)
         
-        # Twelve Data API for multiple periods returns an object, not a list of objects, but let's
-        # handle both cases for robustness
-        
-        # Case 1: Multiple values in the response, we need to find the correct value for each period
-        if isinstance(data, dict):
-            # This handles Twelve Data's response for multi-period requests, which can be an object
-            ma_50_value = float(data.get('50', {}).get('value'))
-            ma_200_value = float(data.get('200', {}).get('value'))
-        elif isinstance(data, list):
-            # This handles the case where the API might return a list of values
-            for entry in data:
-                if entry.get('type') == '50':
-                    ma_50_value = float(entry.get('value'))
-                if entry.get('type') == '200':
-                    ma_200_value = float(entry.get('value'))
+        if ma_50_data and 'value' in ma_50_data:
+            ma_50_value = float(ma_50_data.get('value'))
+        if ma_200_data and 'value' in ma_200_data:
+            ma_200_value = float(ma_200_data.get('value'))
 
         if ma_50_value is None or ma_200_value is None:
             return {"text": "Could not retrieve both 50-day and 200-day moving average values."}
