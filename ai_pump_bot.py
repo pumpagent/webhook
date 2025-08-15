@@ -577,53 +577,57 @@ async def analyze_candlestick_patterns(symbol, interval='1day', outputsize='100'
 # --- NEW: Golden Cross Analysis Function ---
 async def check_golden_cross(symbol, interval='1day'):
     """
-    Checks if a golden cross has occurred for a given symbol by fetching 50 and 200-period SMAs separately.
+    Checks if a golden cross has occurred for a given symbol.
     """
-    ma_50_value = None
-    ma_200_value = None
-
-    # Fetch 50-period SMA
     try:
-        ma_50_response = await _fetch_data_from_twelve_data(
+        # Fetch both moving averages in a single call, which is more efficient and reliable.
+        # This reduces the chances of hitting a rate limit.
+        ma_response = await _fetch_data_from_twelve_data(
             data_type='indicator',
             symbol=symbol,
             indicator='SMA',
-            indicator_period='50',
+            indicator_period='50,200', # Twelve Data supports multiple periods in one request
             interval=interval
         )
-        ma_50_value = float(ma_50_response['data'].get('value'))
-        print(f"Successfully fetched 50-period SMA: {ma_50_value}")
-    except Exception as e:
-        print(f"Failed to fetch 50-period SMA: {e}")
-        return {"text": f"An error occurred while fetching the 50-period SMA: {e}"}
+        data = ma_response['data'].get('values', [])
+        
+        if len(data) < 2:
+            return {"text": "Not enough data to check for a golden cross."}
 
-    # Add a delay to avoid rate limiting
-    await asyncio.sleep(2)
+        # The data is returned with the most recent first, so we check the first two entries
+        # for a crossover. We need the value from the 50 and 200 SMA
+        ma_50_value = None
+        ma_200_value = None
+        
+        # Twelve Data API for multiple periods returns an object, not a list of objects, but let's
+        # handle both cases for robustness
+        
+        # Case 1: Multiple values in the response, we need to find the correct value for each period
+        if isinstance(data, dict):
+            # This handles Twelve Data's response for multi-period requests, which can be an object
+            ma_50_value = float(data.get('50', {}).get('value'))
+            ma_200_value = float(data.get('200', {}).get('value'))
+        elif isinstance(data, list):
+            # This handles the case where the API might return a list of values
+            for entry in data:
+                if entry.get('type') == '50':
+                    ma_50_value = float(entry.get('value'))
+                if entry.get('type') == '200':
+                    ma_200_value = float(entry.get('value'))
 
-    # Fetch 200-period SMA
-    try:
-        ma_200_response = await _fetch_data_from_twelve_data(
-            data_type='indicator',
-            symbol=symbol,
-            indicator='SMA',
-            indicator_period='200',
-            interval=interval
-        )
-        ma_200_value = float(ma_200_response['data'].get('value'))
-        print(f"Successfully fetched 200-period SMA: {ma_200_value}")
-    except Exception as e:
-        print(f"Failed to fetch 200-period SMA: {e}")
-        return {"text": f"An error occurred while fetching the 200-period SMA: {e}"}
-    
-    # Check for a golden cross condition
-    if ma_50_value is not None and ma_200_value is not None:
+        if ma_50_value is None or ma_200_value is None:
+            return {"text": "Could not retrieve both 50-day and 200-day moving average values."}
+
+        # Check for a golden cross condition
         if ma_50_value > ma_200_value:
             result = f"A golden cross has occurred for {symbol}. The 50-period SMA ({ma_50_value:,.2f}) is above the 200-period SMA ({ma_200_value:,.2f})."
         else:
             result = f"A golden cross has not occurred for {symbol}. The 50-period SMA ({ma_50_value:,.2f}) is below the 200-period SMA ({ma_200_value:,.2f})."
+        
         return {"text": result}
-    else:
-        return {"text": "Could not retrieve both moving averages to check for a golden cross."}
+
+    except Exception as e:
+        return {"text": f"An error occurred while checking for a golden cross: {e}"}
 
 
 @client.event
@@ -632,7 +636,7 @@ async def on_message(message):
     if message.author == client.user:
         return
     
-    AUTHORIZED_USER_IDS = ["918556208217067561", "1062318683386552402"]
+    AUTHORIZED_USER_IDS = ["918556208217067561", "YOUR_FRIEND_DISCORD_ID_2"]
     if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in AUTHORIZED_USER_IDS:
         print(f"Ignoring DM from unauthorized user: {message.author.id}")
         return
