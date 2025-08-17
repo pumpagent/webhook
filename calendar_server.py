@@ -113,3 +113,41 @@ if __name__ == '__main__':
     # When running locally, you'll need to handle the port.
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+```
+# requirements.txt
+# This file lists all the Python libraries that Render needs to install
+# for your application to run correctly.
+
+Flask==2.2.2
+google-api-python-client
+google-auth
+google-auth-oauthlib
+```
+# render.yaml
+# This is a configuration file that tells Render how to deploy your service.
+# Render automatically detects this file and configures your app accordingly.
+
+services:
+- type: web
+  name: adiuvansai-mcp-server
+  env: python
+  buildCommand: "pip install -r requirements.txt"
+  startCommand: "gunicorn calendar_server:app"
+  envVars:
+  - key: GOOGLE_CALENDAR_CREDENTIALS
+    sync: false
+```
+# credentials.json
+# You DO NOT push this file to Git. Instead, you'll copy its contents and
+# paste them into Render as a secure environment variable.
+
+# Copy the entire content of your credentials.json file here.
+# For example:
+# {
+#   "web": {
+#     "client_id": "...",
+#     "project_id": "...",
+#     "auth_uri": "...",
+#     ...
+#   }
