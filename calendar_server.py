@@ -133,7 +133,7 @@ services:
   name: adiuvansai-mcp-server
   env: python
   buildCommand: "pip install -r requirements.txt"
-  startCommand: "python calendar_server.py"
+  startCommand: "gunicorn calendar_server:app"
   envVars:
   - key: GOOGLE_CALENDAR_CREDENTIALS
     sync: false
