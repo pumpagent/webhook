@@ -1,0 +1,26 @@
+{
+  "tools": [
+    {
+      "name": "schedule_appointment",
+      "description": "Schedules a new appointment in Google Calendar with a summary, start time, and end time.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "A brief summary or title for the calendar event."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "The start date and time of the event in ISO 8601 format."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "The end date and time of the event in ISO 8601 format."
+          }
+        },
+        "required": ["summary", "start_time", "end_time"]
+      }
+    }
+  ]
+}
