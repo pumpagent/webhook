@@ -7,7 +7,7 @@ import json
 from flask import Flask, request, jsonify
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -20,34 +20,27 @@ app = Flask(__name__)
 # Function to get Google Calendar service.
 def get_calendar_service():
     """
-    Retrieves the Google Calendar service object using credentials stored
-    in a JSON file. This is the secure way to authenticate.
+    Retrieves the Google Calendar service object using credentials and token
+    from environment variables for secure, production-ready authentication.
     """
     creds = None
-    # The file token.json stores the user's access and refresh tokens.
-    # We will get this after the first run and store it.
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    
-    # If there are no valid credentials, let the user authenticate.
-    if not creds or not creds.valid:
+    try:
+        # Load the credentials from the GOOGLE_CALENDAR_CREDENTIALS env variable
+        creds_info = json.loads(os.environ.get('GOOGLE_CALENDAR_CREDENTIALS'))
+        # Load the token from the GOOGLE_CALENDAR_TOKEN env variable
+        token_info = json.loads(os.environ.get('GOOGLE_CALENDAR_TOKEN'))
+        
+        # Build a credentials object from the loaded token info.
+        creds = Credentials.from_authorized_user_info(info=token_info, scopes=SCOPES)
+        
+        # If the token has expired, refresh it.
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        else:
-            # Load credentials from environment variables, as recommended for Render.
-            try:
-                creds_info = json.loads(os.environ.get('GOOGLE_CALENDAR_CREDENTIALS'))
-                flow = InstalledAppFlow.from_client_config(creds_info, SCOPES)
-                creds = flow.run_local_server(port=0)
-            except json.JSONDecodeError:
-                return jsonify({"error": "Invalid GOOGLE_CALENDAR_CREDENTIALS environment variable."}), 400
-            except Exception as e:
-                return jsonify({"error": f"Authentication failed: {e}"}), 500
-        
-        # Save the credentials for the next run.
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-
+    except (json.JSONDecodeError, TypeError) as e:
+        return jsonify({"error": f"Failed to load credentials or token from environment variables: {e}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Authentication failed: {e}"}), 500
+    
     service = build('calendar', 'v3', credentials=creds)
     return service
 
@@ -61,6 +54,9 @@ def schedule_appointment():
     try:
         # Parse the JSON payload from the request.
         data = request.json
+        if not data:
+            return jsonify({"error": "No JSON payload received."}), 400
+        
         summary = data.get('summary', 'New AI Agent Consultation')
         start_time = data.get('start_time')
         end_time = data.get('end_time')
@@ -110,44 +106,6 @@ def schedule_appointment():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # When running locally, you'll need to handle the port.
+    # When running on Render, the port is provided as an environment variable.
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
-
-```
-# requirements.txt
-# This file lists all the Python libraries that Render needs to install
-# for your application to run correctly.
-
-Flask==2.2.2
-google-api-python-client
-google-auth
-google-auth-oauthlib
-```
-# render.yaml
-# This is a configuration file that tells Render how to deploy your service.
-# Render automatically detects this file and configures your app accordingly.
-
-services:
-- type: web
-  name: adiuvansai-mcp-server
-  env: python
-  buildCommand: "pip install -r requirements.txt"
-  startCommand: "gunicorn calendar_server:app"
-  envVars:
-  - key: GOOGLE_CALENDAR_CREDENTIALS
-    sync: false
-```
-# credentials.json
-# You DO NOT push this file to Git. Instead, you'll copy its contents and
-# paste them into Render as a secure environment variable.
-
-# Copy the entire content of your credentials.json file here.
-# For example:
-# {
-#   "web": {
-#     "client_id": "...",
-#     "project_id": "...",
-#     "auth_uri": "...",
-#     ...
-#   }
+    app.run(host='0.0.0.0', port=port, debug=False)
