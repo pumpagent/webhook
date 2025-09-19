@@ -494,7 +494,7 @@ async def on_message(message):
     if message.author == client.user:
         return
     
-    AUTHORIZED_USER_IDS = ["918556208217067561", "1062318683386552402", "828490037787492363", "939269185127727125", "1035974941021044807" ]
+    AUTHORIZED_USER_IDS = ["918556208217067561", "1062318683386552402", "828490037787492363", "939269185127727125", "1035974941021044807", "923082335740641341" ]
     if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in AUTHORIZED_USER_IDS:
         print(f"Ignoring DM from unauthorized user: {message.author.id}")
         return
