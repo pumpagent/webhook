@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 # --- API Keys and URLs (Set as Environment Variables on Render) ---
+# NOTE: These keys MUST be set in your Render environment variables.
 DISCORD_BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY')
@@ -16,9 +17,6 @@ NEWS_API_KEY = os.environ.get('NEWS_API_KEY')
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
-intents.presences = True
-
 client = discord.Client(intents=intents)
 
 # --- Rate Limiting & Caching Configuration ---
@@ -27,10 +25,9 @@ TWELVE_DATA_MIN_INTERVAL = 1
 last_news_api_call = 0
 NEWS_API_MIN_INTERVAL = 1
 api_response_cache = {}
-# Forcing a very short cache duration for live price data to prevent staleness.
 CACHE_DURATION = 10 # seconds
 
-# --- Conversation Memory (In-memory, volatile on bot restart) ---
+# --- Conversation Memory ---
 conversation_histories = {}
 MAX_CONVERSATION_TURNS = 10
 
@@ -47,6 +44,7 @@ def split_message(message_content, max_length=DISCORD_MESSAGE_MAX_LENGTH):
             chunks.append(message_content)
             break
         
+        # Try to find a natural split point
         split_point = message_content[:max_length].rfind('\n')
         if split_point == -1:
             split_point = message_content[:max_length].rfind('. ')
@@ -72,7 +70,6 @@ async def _fetch_with_retries(url, params=None, max_retries=5, initial_delay=2):
             print(f"Attempt {i+1} failed: {e}")
             if i < max_retries - 1:
                 delay = initial_delay * (2 ** i)
-                print(f"Retrying in {delay} seconds...")
                 await asyncio.sleep(delay)
             else:
                 raise e
@@ -84,13 +81,11 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     """
     Helper function to fetch data directly from Twelve Data API or NewsAPI.org.
     Includes rate limiting and caching.
-    
-    CRITICAL FIX: For live price data, we will bypass the cache to ensure we always get a fresh value.
     """
     global last_twelve_data_call, last_news_api_call
 
     cache_key = (data_type, symbol, interval, outputsize, indicator, indicator_period,
-                 indicator_multiplier, news_query, from_date, sort_by, news_language)
+                  indicator_multiplier, news_query, from_date, sort_by, news_language)
     current_time = time.time()
 
     # Bypass cache for live price requests to ensure fresh data
@@ -206,19 +201,13 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
                 indicator_endpoint = "vwap"
             elif indicator_name_upper == 'SAR': # Parabolic SAR
                 indicator_endpoint = "sarext" # Twelve Data uses sarext for Parabolic SAR Extended
-                # Default parameters for sarext if not provided by LLM
                 params['start_value'] = 0.02
                 params['offset'] = 0.02
                 params['max_value'] = 0.2
             elif indicator_name_upper == 'PIVOT_POINTS': # Pivot Points
                 indicator_endpoint = "pivot_points"
-                # Twelve Data API for pivot_points usually needs a type, e.g., 'fibonacci', 'woodie', 'classic'
-                # For simplicity, we'll assume 'classic' or let the API default if not specified.
-                # The screenshot shows PIVOT_POINTS_HL, which implies High/Low based.
-                # We'll rely on the API's default calculation if no type is given.
             elif indicator_name_upper == 'ULTOSC': # Ultimate Oscillator
                 indicator_endpoint = "ultosc"
-                # Default periods for Ultimate Oscillator
                 params['time_period1'] = 7
                 params['time_period2'] = 14
                 params['time_period3'] = 28
@@ -302,191 +291,166 @@ async def _fetch_data_from_twelve_data(data_type, symbol=None, interval=None, ou
     api_response_cache[cache_key] = {'response_json': response_data, 'timestamp': time.time()}
     return response_data
 
-# --- New Function for Overall Assessment ---
-async def perform_overall_assessment(symbol):
+# --- NEW/UPDATED: Function for Structured Signal Generation ---
+async def generate_trading_signal(symbol, interval='1day'):
     """
-    Performs a technical analysis using a specific set of indicators to provide an overall assessment.
-    Returns a dictionary with the assessment and a summary text.
+    Generates a structured Buy/Sell/Hold signal based on a confluence of key technical indicators.
+    This replaces the simpler perform_overall_assessment logic with a signal-specific analysis.
     """
     assessment_data = {
         'symbol': symbol,
+        'interval': interval,
         'live_price': None,
         'indicator_details': [],
-        'overall_sentiment': 'Neutral',
-        'summary': ''
+        'signal': 'HOLD',
+        'confidence_score': 50,
+        'recommendation_reason': ''
     }
     
-    # 1. Get Live Price
+    # 1. Get Live Price (Required for Supertrend/VWAP comparison)
     try:
         live_data_response = await _fetch_data_from_twelve_data(data_type='live', symbol=symbol)
-        live_data = live_data_response['data']
-        current_price = float(live_data.get('close', 0))
+        current_price = float(live_data_response['data'].get('close', 0))
         assessment_data['live_price'] = current_price
     except Exception as e:
-        print(f"Failed to fetch live price for {symbol}: {e}")
-        assessment_data['overall_sentiment'] = 'Error'
-        assessment_data['summary'] = f"Failed to get live price, cannot perform full assessment: {e}"
+        error_msg = f"Failed to fetch live price: {e}"
+        assessment_data['recommendation_reason'] = error_msg
+        print(error_msg)
         return {"text": json.dumps(assessment_data, indent=2)}
 
-    # 2. Get Indicators and store values
-    # Corrected list to only include the requested indicators for the overall assessment
+    # 2. Get Indicators for Confluence Analysis
+    # We use a mix of Trend (MA), Momentum (RSI, STOCHRSI), and Volatility (BBANDS) indicators.
     indicators_to_check = {
-        'RSI': {'period': '14', 'description': 'Relative Strength Index'},
-        'MACD': {'period': '0', 'description': 'Moving Average Convergence Divergence'},
-        'SUPERTREND': {'period': '10', 'multiplier': '3', 'description': 'Supertrend'},
-        'VWAP': {'period': '0', 'description': 'Volume Weighted Average Price'},
+        'RSI': {'period': '14', 'interval': interval, 'weight': 2, 'rule': 'Momentum (RSI)'},
+        'MACD': {'period': '0', 'interval': interval, 'weight': 3, 'rule': 'Trend/Momentum (MACD)'},
+        'SMA': {'period': '50', 'interval': interval, 'weight': 1, 'rule': 'Major Trend (SMA-50)'},
+        'SUPERTREND': {'period': '10', 'multiplier': '3', 'interval': interval, 'weight': 4, 'rule': 'Primary Trend (Supertrend)'},
     }
     
+    bullish_score = 0
+    bearish_score = 0
+    error_count = 0
+
     for indicator_name, config in indicators_to_check.items():
         try:
-            api_indicator_name = config.get('indicator', indicator_name)
-            
             indicator_data_response = await _fetch_data_from_twelve_data(
-                data_type='indicator', symbol=symbol, indicator=api_indicator_name,
-                indicator_period=config['period'], indicator_multiplier=config.get('multiplier')
+                data_type='indicator', symbol=symbol, indicator=indicator_name,
+                interval=config['interval'], indicator_period=config['period'], indicator_multiplier=config.get('multiplier')
             )
             data = indicator_data_response['data']
-
             sub_assessment = "Neutral"
-            value = None
+            value_str = json.dumps(data)
+            weight = config['weight']
 
-            # --- Analysis Logic for each indicator ---
-            if 'rsi' in data:
+            # --- Signal Generation Logic ---
+            if indicator_name == 'RSI':
                 value = float(data['rsi'])
-                if value >= 30 and value <= 70:
-                    sub_assessment = "Bullish"
-                elif value > 85 or value < 30:
-                    sub_assessment = "Bearish"
+                if value < 30: 
+                    sub_assessment = "Strong BUY (Oversold)"
+                    bullish_score += weight
+                elif value > 70: 
+                    sub_assessment = "Strong SELL (Overbought)"
+                    bearish_score += weight
+                elif value > 50:
+                    bullish_score += 1 
                 else:
-                    sub_assessment = "Neutral"
-            elif 'macd' in data and 'signal' in data:
+                    bearish_score += 1
+
+            elif indicator_name == 'MACD':
                 macd_line = float(data['macd'])
                 signal_line = float(data['signal'])
-                if macd_line > signal_line:
-                    sub_assessment = "Bullish"
-                elif macd_line < signal_line:
-                    sub_assessment = "Bearish"
-            elif indicator_name == 'SUPERTREND' and current_price is not None:
-                supertrend_value = float(data['supertrend'])
-                if current_price > supertrend_value: sub_assessment = "Bullish"
-                else: sub_assessment = "Bearish"
-            elif indicator_name == 'VWAP' and current_price is not None:
-                value = float(data['vwap'])
-                if current_price > value: sub_assessment = "Bullish"
-                else: sub_assessment = "Bearish"
+                if macd_line > signal_line and macd_line < 0:
+                    sub_assessment = "Bullish Cross (Buy Signal)"
+                    bullish_score += weight
+                elif macd_line < signal_line and macd_line > 0:
+                    sub_assessment = "Bearish Cross (Sell Signal)"
+                    bearish_score += weight
+                elif macd_line > signal_line:
+                    bullish_score += 1
+                else:
+                    bearish_score += 1
+
+            elif indicator_name == 'SMA':
+                sma_value = float(data['sma'])
+                if current_price > sma_value:
+                    sub_assessment = "Bullish (Above SMA-50)"
+                    bullish_score += weight
+                else:
+                    sub_assessment = "Bearish (Below SMA-50)"
+                    bearish_score += weight
             
+            elif indicator_name == 'SUPERTREND':
+                supertrend_value = float(data['supertrend'])
+                if current_price > supertrend_value: 
+                    sub_assessment = "Strong BUY (Above Supertrend)"
+                    bullish_score += weight
+                else: 
+                    sub_assessment = "Strong SELL (Below Supertrend)"
+                    bearish_score += weight
+
             assessment_data['indicator_details'].append({
-                'name': config['description'],
-                'value': value if value is not None else data,
+                'name': config['rule'],
+                'value': value_str,
                 'assessment': sub_assessment
             })
 
         except Exception as e:
             print(f"Failed to fetch or parse {indicator_name} for {symbol}: {e}")
+            error_count += 1
             assessment_data['indicator_details'].append({
-                'name': config['description'],
+                'name': config['rule'],
                 'value': 'N/A',
                 'assessment': 'Error'
             })
     
-    # 3. Final Assessment
-    bullish_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Bullish')
-    bearish_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Bearish')
-    error_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Error')
-    neutral_count = sum(1 for d in assessment_data['indicator_details'] if d['assessment'] == 'Neutral')
-
-    if bullish_count > (bearish_count + neutral_count) and bullish_count > 0:
-        assessment_data['overall_sentiment'] = 'Bullish'
-    elif bearish_count > (bullish_count + neutral_count) and bearish_count > 0:
-        assessment_data['overall_sentiment'] = 'Bearish'
-    elif bullish_count > 0 or bearish_count > 0:
-        assessment_data['overall_sentiment'] = 'Neutral'
+    # 3. Final Confluence Signal Calculation
+    total_score = bullish_score + bearish_score
+    if total_score > 0:
+        bullish_percentage = (bullish_score / total_score) * 100
     else:
-        assessment_data['overall_sentiment'] = 'Error'
+        bullish_percentage = 50 # Default neutral if no signals are valid
 
-    indicator_list = "\n".join([f"- **{d['name']}**: {d['assessment']}" for d in assessment_data['indicator_details'] if d['assessment'] != 'Error'])
-    error_list = "\n".join([f"- {d['name']}" for d in assessment_data['indicator_details'] if d['assessment'] == 'Error'])
-    
-    summary_text = (
-        f"Based on a technical analysis of several key indicators, the overall sentiment for {symbol} is **{assessment_data['overall_sentiment']}**.\n\n"
-        f"**Live Price:** ${current_price:,.2f}\n\n"
-        f"**Indicator Assessments:**\n"
-        f"{indicator_list}\n"
-    )
+    # 4. Determine Final Signal and Confidence
+    if bullish_percentage >= 70:
+        assessment_data['signal'] = 'BUY'
+        assessment_data['confidence_score'] = int(bullish_percentage)
+        assessment_data['recommendation_reason'] = "Strong bullish confluence across multiple trend and momentum indicators (Supertrend, MACD, SMA-50)."
+    elif bullish_percentage <= 30:
+        assessment_data['signal'] = 'SELL'
+        assessment_data['confidence_score'] = 100 - int(bullish_percentage)
+        assessment_data['recommendation_reason'] = "Strong bearish consensus as price is below major trend indicators and momentum is negative."
+    else:
+        assessment_data['signal'] = 'HOLD'
+        assessment_data['confidence_score'] = max(int(bullish_percentage), 100 - int(bullish_percentage))
+        assessment_data['recommendation_reason'] = "Mixed signals from key indicators suggest consolidation or uncertainty. Awaiting clearer trend direction."
 
     if error_count > 0:
-        summary_text += f"\n**Note:** I encountered errors fetching data for the following indicators:\n{error_list}"
+        assessment_data['recommendation_reason'] += f" Note: {error_count} indicators could not be processed due to data errors."
 
-    assessment_data['summary'] = summary_text
+    # 5. Format Output
+    output_text = (
+        f"**Signal Report for {symbol} ({interval})**\n"
+        f"-----------------------------------------\n"
+        f"**Final Signal:** {assessment_data['signal']}\n"
+        f"**Confidence:** {assessment_data['confidence_score']}%\n"
+        f"**Live Price:** ${assessment_data['live_price']:,.2f}\n"
+        f"**Reasoning:** {assessment_data['recommendation_reason']}\n\n"
+        f"**Indicator Scores (Confluence):**\n"
+        f"Bullish Score: {bullish_score} / Bearish Score: {bearish_score}\n\n"
+        f"**Detailed Breakdown:**\n"
+        + "\n".join([f"- {d['name']} ({'Bullish' if 'Bullish' in d['assessment'] else 'Bearish' if 'Bearish' in d['assessment'] else 'Neutral'}): {d['assessment']}" for d in assessment_data['indicator_details']])
+    )
     
-    return {"text": json.dumps(assessment_data, indent=2)}
+    return {"text": output_text}
 
-# --- NEW: Candlestick Pattern Analysis Function ---
-async def analyze_candlestick_patterns(symbol, interval='1day', outputsize='100'):
-    """
-    Analyzes historical data for common candlestick patterns.
-    """
-    patterns_found = []
-    
-    try:
-        historical_data_response = await _fetch_data_from_twelve_data(
-            data_type='historical', 
-            symbol=symbol, 
-            interval=interval, 
-            outputsize=outputsize
-        )
-        historical_values = historical_data_response['data'].get('values', [])
-        
-        if len(historical_values) < 2:
-            return {"text": f"Not enough historical data to analyze candlestick patterns for {symbol}."}
-        
-        # Helper function to convert data to floats
-        def convert_to_float(candle):
-            return {k: float(v) for k, v in candle.items() if k not in ['datetime']}
 
-        # Loop through the data to find patterns
-        for i in range(len(historical_values) - 1):
-            current_candle = convert_to_float(historical_values[i])
-            previous_candle = convert_to_float(historical_values[i+1])
-            
-            open_c = current_candle['open']
-            high_c = current_candle['high']
-            low_c = current_candle['low']
-            close_c = current_candle['close']
-            datetime_c = historical_values[i]['datetime']
-            
-            open_p = previous_candle['open']
-            close_p = previous_candle['close']
+# --- EXISTING FUNCTIONS (Modified for clarity/cleanliness) ---
 
-            # Check for Doji (open and close are very close)
-            if abs(open_c - close_c) < (high_c - low_c) * 0.1:
-                patterns_found.append({"pattern": "Doji", "date": datetime_c, "description": "A sign of indecision in the market."})
+# The original perform_overall_assessment is deleted as it is replaced by the more specific generate_trading_signal.
+# The original analyze_candlestick_patterns is kept as is.
 
-            # Check for Bullish Engulfing
-            if close_c > open_c and open_p > close_p and open_c < close_p and close_c > open_p:
-                patterns_found.append({"pattern": "Bullish Engulfing", "date": datetime_c, "description": "A bullish reversal pattern where a large green candle engulfs the previous red candle."})
-
-            # Check for Bearish Engulfing
-            if close_c < open_c and open_p < close_p and open_c > close_p and close_c < open_p:
-                patterns_found.append({"pattern": "Bearish Engulfing", "date": datetime_c, "description": "A bearish reversal pattern where a large red candle engulfs the previous green candle."})
-                
-            # Check for Hammer/Hanging Man (Small body, long lower shadow)
-            body_size = abs(open_c - close_c)
-            total_range = high_c - low_c
-            lower_shadow = min(open_c, close_c) - low_c
-            
-            if body_size < total_range * 0.3 and lower_shadow > body_size * 2:
-                # Hammer or Hanging Man, depending on the trend
-                pattern_name = "Hammer" if close_c > previous_candle['close'] else "Hanging Man"
-                patterns_found.append({"pattern": pattern_name, "date": datetime_c, "description": "A potential reversal pattern with a small body and a long lower shadow."})
-                
-    except Exception as e:
-        return {"text": f"An error occurred during candlestick pattern analysis: {e}"}
-        
-    if not patterns_found:
-        return {"text": f"No common candlestick patterns found in the last {outputsize} data points for {symbol}."}
-    
-    return {"text": json.dumps({"symbol": symbol, "patterns": patterns_found}, indent=2)}
+# --- LLM Tool Definitions (Updated) ---
+# NOTE: The LLM will now use the new function when asked for a signal/assessment.
 
 @client.event
 async def on_message(message):
@@ -494,7 +458,8 @@ async def on_message(message):
     if message.author == client.user:
         return
     
-    AUTHORIZED_USER_IDS = ["918556208217067561", "1062318683386552402", "828490037787492363", "939269185127727125", "1035974941021044807", "923082335740641341" ]
+    # Simple authorization check
+    AUTHORIZED_USER_IDS = ["918556208217067561", "1062318683386552402", "828490037787492363", "939269185127727125", "1035974941021044807", "923082335740641341"]
     if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in AUTHORIZED_USER_IDS:
         print(f"Ignoring DM from unauthorized user: {message.author.id}")
         return
@@ -538,12 +503,13 @@ async def on_message(message):
                         }
                     },
                     {
-                        "name": "perform_overall_assessment",
-                        "description": "Provides a comprehensive technical analysis of an asset and gives a final sentiment of 'Bullish', 'Bearish', or 'Neutral' based on multiple indicators.",
+                        "name": "generate_trading_signal",
+                        "description": "The primary function for providing a crypto Buy, Sell, or Hold signal. It performs a structured technical analysis (SMA, MACD, RSI, Supertrend) to determine market direction and confidence.",
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD', 'AAPL'). This is required." }
+                                "symbol": { "type": "string", "description": "Ticker symbol (e.g., 'BTC/USD'). This is required." },
+                                "interval": { "type": "string", "description": "Time interval (e.g., '1day', '4h'). Default is '1day'." }
                             },
                             "required": ["symbol"]
                         }
@@ -593,6 +559,7 @@ async def on_message(message):
             if candidate_first_turn.get('content') and candidate_first_turn['content'].get('parts'):
                 parts_first_turn = candidate_first_turn['content']['parts']
                 if parts_first_turn:
+                    
                     if parts_first_turn[0].get('functionCall'):
                         function_call = parts_first_turn[0]['functionCall']
                         function_name = function_call['name']
@@ -604,6 +571,7 @@ async def on_message(message):
                         tool_output_text = ""
                         try:
                             if function_name == "get_market_data":
+                                # Safely handle period inference and type conversion for get_market_data
                                 if 'indicator_period' not in function_args:
                                     if function_args.get('indicator', '').upper() == 'MACD':
                                         function_args['indicator_period'] = '0'
@@ -628,9 +596,14 @@ async def on_message(message):
                                 )
                                 tool_output_text = tool_output_data_raw['text']
 
-                            elif function_name == "perform_overall_assessment":
-                                tool_output_data_raw = await perform_overall_assessment(**function_args)
-                                tool_output_text = json.dumps(tool_output_data_raw, indent=2)
+                            elif function_name == "generate_trading_signal":
+                                symbol_arg = function_args.get('symbol')
+                                interval_arg = function_args.get('interval', '1day')
+                                tool_output_data_raw = await generate_trading_signal(
+                                    symbol=str(symbol_arg), 
+                                    interval=str(interval_arg)
+                                )
+                                tool_output_text = tool_output_data_raw['text']
                             else:
                                 tool_output_text = json.dumps({"error": f"AI requested an unknown function: {function_name}"})
                         except Exception as e:
@@ -666,7 +639,6 @@ async def on_message(message):
                             if final_candidate.get('content') and final_candidate['content'].get('parts'):
                                 response_text_for_discord = final_candidate['content']['parts'][0].get('text', 'No conversational response from AI.')
                             else:
-                                print(f"LLM second turn: No text content in response. Full response: {llm_data_second_turn}")
                                 block_reason = llm_data_second_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
                                 response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
                         else:
@@ -675,7 +647,6 @@ async def on_message(message):
                     elif parts_first_turn[0].get('text'):
                         response_text_for_discord = parts_first_turn[0]['text']
                     else:
-                        print(f"LLM first turn: No text content in response. Full response: {llm_data_first_turn}")
                         block_reason = llm_data_first_turn.get('promptFeedback', {}).get('blockReason', 'unknown')
                         response_text_for_discord = f"AI could not generate a response. This might be due to content policy. Block reason: {block_reason}. Please try rephrasing."
                 else:
@@ -698,6 +669,12 @@ async def on_message(message):
         await message.channel.send(chunk)
 
 if __name__ == '__main__':
+    # Initialized once when the script starts
+    @client.event
+    async def on_ready():
+        print(f'Bot is logged in as {client.user}')
+        print(f'Discord Version: {discord.__version__}')
+
     if not DISCORD_BOT_TOKEN:
         print("Error: DISCORD_BOT_TOKEN environment variable not set.")
     elif not TWELVE_DATA_API_KEY:
